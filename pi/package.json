@@ -1,0 +1,10 @@
+{
+  "name": "pi-kb",
+  "version": "0.1.0",
+  "description": "Pi extension: talk to the personal knowledge-base vault from any folder (/kb command + kb_search tool)",
+  "type": "module",
+  "main": "kb-harness.mjs",
+  "keywords": ["pi-package", "pi-extension", "pi-coding-agent"],
+  "license": "Apache-2.0",
+  "private": true
+}
