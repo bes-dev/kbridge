@@ -73,20 +73,59 @@ Nil opens a normal, splittable window.  Set this (or add a
   'action (lambda (b) (kb-open-page (button-get b 'kb-page))))
 
 (defun kb--buttonize-region (beg end)
-  "Turn [[page]] references between BEG and END into buttons."
+  "Turn [[page]] refs between BEG and END into buttons; hide the brackets.
+Handles a bare name, a relative path, an alias (NAME|x) and a section (#sec)."
   (save-excursion
     (goto-char beg)
-    (while (re-search-forward "\\[\\[\\([^]|#\n]+\\)" end t)
-      (make-button (match-beginning 1) (match-end 1)
-                   :type 'kb-wikilink 'kb-page (string-trim (match-string 1))))))
+    (while (re-search-forward "\\[\\[\\([^]\n]+?\\)\\]\\]" end t)
+      (let* ((m0 (match-beginning 0)) (m1 (match-end 0))
+             (inner-beg (+ m0 2)) (inner-end (- m1 2))
+             (raw (match-string 1))
+             (page (string-trim (car (split-string (car (split-string raw "#")) "|")))))
+        (put-text-property m0 inner-beg 'invisible t)
+        (put-text-property inner-end m1 'invisible t)
+        (make-button inner-beg inner-end :type 'kb-wikilink 'kb-page page)))))
+
+(defun kb--resolve-page (name)
+  "Resolve NAME (bare name, basename, or relative path) to a file under the vault."
+  (let* ((vault (file-name-as-directory (kb-vault)))
+         (name (string-trim name))
+         (rel (if (string-suffix-p ".md" name) name (concat name ".md"))))
+    (cond
+     ((file-exists-p (expand-file-name rel vault)) (expand-file-name rel vault))
+     ((file-exists-p (expand-file-name name vault)) (expand-file-name name vault))
+     (t (car (ignore-errors
+               (directory-files-recursively
+                vault (concat "\\`" (regexp-quote (file-name-nondirectory rel)) "\\'"))))))))
 
 (defun kb-open-page (name)
-  "Open the vault page called NAME (first matching <name>.md under the vault)."
-  (let* ((vault (kb-vault))
-         (hit (car (ignore-errors
-                     (directory-files-recursively
-                      vault (concat "\\`" (regexp-quote name) "\\.md\\'"))))))
-    (if hit (find-file hit) (message "kb: no page named %s" name))))
+  "Open the vault page referred to by NAME (path, basename, or title)."
+  (let ((hit (kb--resolve-page name)))
+    (if hit (find-file hit) (message "kb: no page found for %s" name))))
+
+(defun kb--fontify-markdown (beg end)
+  "Apply lightweight markdown styling between BEG and END, hiding the markers.
+Covers headings, **bold**, `code` and -/*/+ bullets — enough for chat answers."
+  (let ((end (copy-marker end)))
+    (save-excursion
+      (goto-char beg)                       ; headings:  ## Text
+      (while (re-search-forward "^\\(#+[ \t]*\\)\\(.+\\)$" end t)
+        (put-text-property (match-beginning 1) (match-end 1) 'invisible t)
+        (add-face-text-property (match-beginning 2) (match-end 2) 'bold))
+      (goto-char beg)                       ; bold:  **text**
+      (while (re-search-forward "\\*\\*\\([^*\n]+?\\)\\*\\*" end t)
+        (put-text-property (match-beginning 0) (+ 2 (match-beginning 0)) 'invisible t)
+        (put-text-property (- (match-end 0) 2) (match-end 0) 'invisible t)
+        (add-face-text-property (match-beginning 1) (match-end 1) 'bold))
+      (goto-char beg)                       ; inline code:  `text`
+      (while (re-search-forward "`\\([^`\n]+\\)`" end t)
+        (put-text-property (match-beginning 0) (1+ (match-beginning 0)) 'invisible t)
+        (put-text-property (1- (match-end 0)) (match-end 0) 'invisible t)
+        (add-face-text-property (match-beginning 1) (match-end 1) 'font-lock-constant-face))
+      (goto-char beg)                       ; bullets:  -, *, + → •
+      (while (re-search-forward "^\\([ \t]*\\)[-*+]\\([ \t]+\\)" end t)
+        (put-text-property (match-beginning 0) (match-end 0)
+                           'display (concat (match-string 1) "• "))))))
 
 ;;;; Chat buffer state
 
@@ -238,7 +277,9 @@ so this `kill-emacs-hook' makes sure no `pi --mode rpc' process is orphaned."
       (setq kb-chat--busy nil)
       (kb-chat--stop-spinner)
       (when (markerp kb-chat--answer-start)
-        (kb--buttonize-region kb-chat--answer-start (point-max)))
+        (let ((inhibit-read-only t))
+          (kb--fontify-markdown kb-chat--answer-start (point-max))
+          (kb--buttonize-region kb-chat--answer-start (point-max))))
       (let ((inhibit-read-only t))
         (goto-char (point-max))
         (insert "\n\n" (propertize "❯ " 'face 'minibuffer-prompt))
