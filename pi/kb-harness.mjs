@@ -5,7 +5,9 @@
  * file tools using ABSOLUTE paths under $VAULT (never cd), driven by the vault's own
  * CLAUDE.md rules. This extension adds the two things the agent can't get for free:
  *   - `kb_search`  — find pages by content/filename anywhere, scoped to the vault;
- *   - `/kb <req>`  — loads vault context and detects the mode (query / scan / ingest).
+ *   - `kb_sync`    — push/pull the vault to its (optionally gcrypt-encrypted) remote;
+ *   - `/kb <req>`  — loads vault context and detects the mode (query / scan / ingest);
+ *   - `/kb-sync`   — drive the kb-sync script (init / push / pull / status).
  *
  * Load:  pi install <kb-harness>/pi   (global)   ·   or: pi -e ./kb-harness.mjs
  * Vault: $KB_VAULT, else the vault_path recorded by setup.sh.
@@ -33,11 +35,42 @@ function resolveVault() {
 	return null;
 }
 
+// The encrypted-sync layer is shared with the Claude skill: a single `kb-sync` script and a
+// `sync_remote` file living in the kb skill dir (same place as vault_path). Resolution mirrors
+// resolveVault so both harnesses agree even when the Pi ext is installed globally.
+const resolveSyncRemote = () => {
+	if (process.env.KB_SYNC_REMOTE) return process.env.KB_SYNC_REMOTE;
+	for (const f of [path.join(HERE, "..", ".claude/skills/kb/sync_remote"), path.join(HOME, ".claude/skills/kb/sync_remote")]) {
+		try {
+			const v = fs.readFileSync(f, "utf8").trim();
+			if (v) return v;
+		} catch {}
+	}
+	return null;
+};
+
+const resolveSyncBin = () => {
+	const cands = process.env.KB_SYNC_BIN ? [process.env.KB_SYNC_BIN] : [];
+	cands.push(path.join(HOME, ".claude/skills/kb/kb-sync"), path.join(HERE, "..", ".claude/skills/kb/kb-sync"));
+	return cands.find((f) => fs.existsSync(f)) || null;
+};
+
 const text = (s) => ({ content: [{ type: "text", text: String(s).slice(0, 8000) || "(no output)" }], details: {} });
 
 function run(cmd, args) {
 	return new Promise((res) =>
 		execFile(cmd, args, { timeout: 30000, maxBuffer: 8 * 1024 * 1024 }, (err, out) => res({ ok: !err || err.code === 1, out: out || "" })),
+	);
+}
+
+// Sync can hit the network and writes to stderr on failure — capture both streams, longer timeout.
+function runSync(args) {
+	const bin = resolveSyncBin();
+	if (!bin) return Promise.resolve("kb-sync not installed — run the harness setup.sh.");
+	return new Promise((res) =>
+		execFile(bin, args, { timeout: 180000, maxBuffer: 8 * 1024 * 1024 }, (err, out, errOut) =>
+			res(((out || "") + (errOut || "")).trim() || (err ? String(err.message) : "(no output)")),
+		),
 	);
 }
 
@@ -85,6 +118,27 @@ export default function install(pi) {
 		},
 	});
 
+	pi.registerTool({
+		name: "kb_sync",
+		label: "kb_sync",
+		description: "Sync the knowledge-base vault with its remote (optionally end-to-end encrypted via gcrypt): push commits local changes and uploads them, pull downloads remote changes, status reports the mode. The local vault stays plaintext; only the remote is encrypted. Offer to push after writing/ingesting.",
+		parameters: {
+			type: "object",
+			properties: { command: { type: "string", enum: ["push", "pull", "status"], description: "push local changes, pull remote changes, or show sync status" } },
+			required: ["command"],
+		},
+		execute: async (_id, p) => text(await runSync([p.command])),
+	});
+
+	pi.registerCommand("kb-sync", {
+		description: "Sync the knowledge base with its remote. /kb-sync [push|pull|status|init <gcrypt-url> [gpg-key]]",
+		handler: async (args) => {
+			const parts = args.trim().split(/\s+/).filter(Boolean);
+			const out = await runSync(parts.length ? parts : ["status"]);
+			pi.sendUserMessage("```\n" + out.slice(0, 4000) + "\n```");
+		},
+	});
+
 	pi.registerCommand("kb", {
 		description: "Talk to the knowledge base: query it, scan the CWD for material, or ingest a source. /kb <request>",
 		getArgumentCompletions: (prefix) => {
@@ -106,6 +160,8 @@ export default function install(pi) {
 
 	pi.on("session_start", async (_e, ctx) => {
 		const vault = resolveVault();
-		ctx.ui?.setStatus?.("kb", vault ? `KB ${path.basename(vault)} · ${listPages(vault).length} pages · /kb` : "KB vault not configured — run setup.sh");
+		if (!vault) return void ctx.ui?.setStatus?.("kb", "KB vault not configured — run setup.sh");
+		const enc = String(resolveSyncRemote() || "").startsWith("gcrypt::") ? " · 🔒 encrypted" : "";
+		ctx.ui?.setStatus?.("kb", `KB ${path.basename(vault)} · ${listPages(vault).length} pages${enc} · /kb`);
 	});
 }

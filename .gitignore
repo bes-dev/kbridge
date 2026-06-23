@@ -1,3 +1,4 @@
 .claude/skills/kb/vault_path
+.claude/skills/kb/sync_remote
 node_modules/
 .DS_Store

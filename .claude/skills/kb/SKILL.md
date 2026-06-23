@@ -47,7 +47,7 @@ Behavior:
 
 ### Write / ingest mode
 Triggers: explicit confirmation of a proposed plan, or direct commands like "запиши это в базу", "добавь в проект X".
-Behavior: execute the ingest workflow from the vault CLAUDE.md. Every new page gets YAML front matter (`title`, `tags`, `created: YYYY-MM-DD`). Always update `index.md` and append a `## [YYYY-MM-DD] ingest | <source>` line to `log.md`. Cross-reference with `[[wikilinks]]`.
+Behavior: execute the ingest workflow from the vault CLAUDE.md. Every new page gets YAML front matter (`title`, `tags`, `created: YYYY-MM-DD`). Always update `index.md` and append a `## [YYYY-MM-DD] ingest | <source>` line to `log.md`. Cross-reference with `[[wikilinks]]`. Route by reuse — project-specific material to `projects/<project>/`, reusable cross-project reference to `resources/<topic>/`; move finished or dormant projects to `archive/` (the vault CLAUDE.md is authoritative).
 
 ## Rules
 
@@ -57,3 +57,14 @@ Behavior: execute the ingest workflow from the vault CLAUDE.md. Every new page g
 - One topic per page; split if a page grows too long.
 - In scan-and-propose mode, always present the plan and wait for confirmation before writing.
 - If a question is better answered by checking the current state of the vault than by guessing, read the files first.
+
+## Sync (optional, may be unconfigured)
+
+The vault can be backed by a remote — optionally end-to-end-encrypted via `git-remote-gcrypt`. The local vault is always plaintext (so you can read/grep it); only the remote is ciphertext. The passphrase/key is handled by gpg-agent and the OS keychain — never by this skill. Drive it through Bash with the sibling script `~/.claude/skills/kb/kb-sync`:
+
+- `kb-sync status` — show the current mode (plain / encrypted) and remote.
+- `kb-sync push` — commit local changes and upload. Offer this after write/ingest mode.
+- `kb-sync pull` — download remote changes. Run before a query if the vault may be stale on this device.
+- `kb-sync init <gcrypt-remote-url> [gpg-key-id]` — export the existing vault to a new encrypted remote (one-time). Omit the key id for a symmetric passphrase.
+
+Only act on sync when the user asks, or offer it after writing. Note: this protects the remote (cloud sees only ciphertext); local device-loss is covered by full-disk encryption, not by this skill.

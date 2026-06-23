@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# Sync the knowledge-base vault with an optional end-to-end-encrypted remote.
+#
+# The vault stays PLAINTEXT on local disk (so the agents can read/grep it); only
+# what is pushed to the remote is encrypted, by git-remote-gcrypt + GnuPG. The
+# passphrase/key lives in gpg-agent (and, on macOS, the Keychain via
+# pinentry-mac) — this script never sees or stores it.
+#
+# Usage:
+#   kb-sync init <gcrypt-remote-url> [gpg-key-id]   export the current vault to an encrypted remote
+#   kb-sync push                                    commit local changes and push
+#   kb-sync pull                                    pull remote changes
+#   kb-sync status                                  show mode, remote and dirty count
+#
+# Mode is implicit in the remote URL: a `gcrypt::` URL is end-to-end encrypted,
+# anything else is a plain git remote. With no remote recorded, sync is a no-op
+# beyond local git. Threat model: this protects the REMOTE (cloud sees only
+# ciphertext); local device loss is covered by full-disk encryption (FileVault),
+# not by this script.
+
+set -euo pipefail
+
+SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+die() { echo "kb-sync: $*" >&2; exit 1; }
+
+resolve_vault() {
+  if [ -n "${KB_VAULT:-}" ] && [ -d "${KB_VAULT}" ]; then echo "${KB_VAULT}"; return; fi
+  for f in "$SKILL_DIR/vault_path" "$HOME/.claude/skills/kb/vault_path"; do
+    [ -f "$f" ] || continue
+    v="$(tr -d '\n' < "$f")"
+    [ -n "$v" ] && [ -d "$v" ] && { echo "$v"; return; }
+  done
+  die "vault not configured — run setup.sh (or set \$KB_VAULT)"
+}
+
+REMOTE_FILE="$SKILL_DIR/sync_remote"
+
+resolve_remote() {
+  [ -n "${KB_SYNC_REMOTE:-}" ] && { echo "${KB_SYNC_REMOTE}"; return 0; }
+  for f in "$REMOTE_FILE" "$HOME/.claude/skills/kb/sync_remote"; do
+    [ -f "$f" ] && { tr -d '\n' < "$f"; return 0; }
+  done
+  return 0
+}
+
+VAULT="$(resolve_vault)"
+git_v() { git -C "$VAULT" "$@"; }
+branch() { git_v symbolic-ref --short HEAD 2>/dev/null || echo main; }
+
+ensure_repo() {
+  [ -d "$VAULT/.git" ] || git_v init -q
+  # Sync commits are machine-generated; fall back to a neutral local identity only
+  # when none is configured, so a fresh machine without git identity still works.
+  git_v config user.email >/dev/null 2>&1 || git_v config user.email "kbridge@localhost"
+  git_v config user.name  >/dev/null 2>&1 || git_v config user.name  "kbridge"
+}
+
+commit_all() {
+  ensure_repo
+  [ -n "$(git_v status --porcelain)" ] || return 0
+  git_v add -A
+  git_v commit -q -m "kb: sync $(date +%Y-%m-%dT%H:%M:%S)"
+}
+
+require_remote() {
+  case "$1" in
+    gcrypt::*)
+      command -v git-remote-gcrypt >/dev/null 2>&1 || die "git-remote-gcrypt not found — install it to use an encrypted remote (brew install git-remote-gcrypt gnupg)"
+      command -v gpg >/dev/null 2>&1 || die "gnupg not found — install it (brew install gnupg)"
+      ;;
+    "") die "no remote configured — run: kb-sync init <gcrypt-remote-url>" ;;
+  esac
+}
+
+case "${1:-status}" in
+  init)
+    url="${2:-}"; key="${3:-}"
+    [ -n "$url" ] || die "usage: kb-sync init <gcrypt-remote-url> [gpg-key-id]"
+    require_remote "$url"
+    ensure_repo
+    commit_all
+    if git_v remote | grep -qx kb; then git_v remote set-url kb "$url"; else git_v remote add kb "$url"; fi
+    if [ -n "$key" ]; then git_v config remote.kb.gcrypt-participants "$key"; else git_v config --unset remote.kb.gcrypt-participants 2>/dev/null || true; fi
+    echo "$url" > "$REMOTE_FILE"
+    case "$url" in gcrypt::*) echo "Exporting vault to encrypted remote (you may be prompted for a passphrase)…";; *) echo "Exporting vault to remote…";; esac
+    git_v push -u kb "$(branch)"
+    echo "Done. Vault exported to: $url"
+    ;;
+  push)
+    url="$(resolve_remote)"; require_remote "$url"
+    commit_all
+    git_v push kb "$(branch)"
+    ;;
+  pull)
+    url="$(resolve_remote)"; require_remote "$url"
+    ensure_repo
+    git_v pull --no-edit kb "$(branch)"
+    ;;
+  status)
+    url="$(resolve_remote)"
+    case "$url" in gcrypt::*) mode="encrypted (gcrypt)";; "") mode="plain (no remote)";; *) mode="plain remote";; esac
+    echo "vault:  $VAULT"
+    echo "mode:   $mode"
+    echo "remote: ${url:-<none>}"
+    if [ -d "$VAULT/.git" ]; then echo "dirty:  $(git_v status --porcelain | wc -l | tr -d ' ') file(s) uncommitted"; fi
+    ;;
+  *) die "unknown command '${1}' (init|push|pull|status)" ;;
+esac
