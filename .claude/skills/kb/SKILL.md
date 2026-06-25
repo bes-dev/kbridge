@@ -18,8 +18,8 @@ If the file is missing or empty, the skill is not installed correctly. Tell the 
 ## Step 1 — Load vault context
 
 Always start by reading:
-- `$VAULT/CLAUDE.md` — vault rules (structure, conventions, ingest/query/lint/distill workflows)
-- `$VAULT/index.md` — content catalog
+- `$VAULT/AGENTS.md` — vault rules (structure, conventions, ingest/query/lint/distill workflows)
+- `$VAULT/index.md` — project map (one line per active project)
 
 These define how to operate on the vault. Follow them strictly for the rest of the session. Never change CWD — use absolute paths under `$VAULT/`.
 
@@ -36,7 +36,7 @@ Triggers: "осмотрись тут", "что здесь полезного д�
 Behavior:
 1. Survey CWD with depth-limited `ls` / `find`. Skip junk (`.git`, `node_modules`, `__pycache__`, build artifacts, large binaries, lockfiles).
 2. If the candidate set is large (>50 files) or deeply nested, spawn an `Agent` (`subagent_type: Explore`) to triage and return a compact report — protects the main context.
-3. Read `index.md` and the relevant `projects/<name>/context.md` (or `topics/<name>/context.md`) to understand the target. If no project hint was given, propose the closest match based on content.
+3. Read `index.md` (the project map) and the relevant `projects/<name>/context.md` to understand the target. If no project hint was given, propose the closest match based on content.
 4. Output a **plan only** — do not write anything yet. The plan should specify:
    - which source files map to which vault paths,
    - new pages to create (with proposed titles and YAML front matter),
@@ -47,7 +47,7 @@ Behavior:
 
 ### Write / ingest mode
 Triggers: explicit confirmation of a proposed plan, or direct commands like "запиши это в базу", "добавь в проект X".
-Behavior: execute the ingest workflow from the vault CLAUDE.md. Every new page gets YAML front matter (`title`, `tags`, `created: YYYY-MM-DD`). Always update `index.md` and append a `## [YYYY-MM-DD] ingest | <source>` line to `log.md`. Cross-reference with `[[wikilinks]]`. Route by reuse — project-specific material to `projects/<project>/`, reusable cross-project reference to `resources/<topic>/`; move finished or dormant projects to `archive/` (the vault CLAUDE.md is authoritative).
+Behavior: execute the ingest workflow from the vault AGENTS.md. Every new page gets YAML front matter (`title`, `tags`, `created: YYYY-MM-DD`). Append a `## [YYYY-MM-DD] ingest | <source>` line to `log.md`, and update `index.md` only if a new project was created (it is a project map, not a page catalog). Cross-reference with `[[wikilinks]]`. Route by reuse — project-specific material to `projects/<project>/`; reusable cross-project reference to `resources/<topic>/` and dormant projects to `archive/`, both created on demand (the vault AGENTS.md is authoritative).
 
 ## Rules
 

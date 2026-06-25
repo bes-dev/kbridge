@@ -51,7 +51,7 @@ claude "/kb осмотрись тут, это для проекта Y"  # scan t
   vault, from anywhere.
 - `kb_sync` — a tool to push/pull the vault to its (optionally encrypted) remote (see below).
 
-The vault's own `CLAUDE.md` is the source of truth for conventions — kbridge points the agent at
+The vault's own `AGENTS.md` is the source of truth for conventions — kbridge points the agent at
 it rather than duplicating the rules.
 
 ## Emacs setup

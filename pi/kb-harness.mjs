@@ -3,7 +3,7 @@
  *
  * Mirrors the Claude Code `/kb` skill: the agent operates on the vault with its native
  * file tools using ABSOLUTE paths under $VAULT (never cd), driven by the vault's own
- * CLAUDE.md rules. This extension adds the two things the agent can't get for free:
+ * AGENTS.md rules. This extension adds the two things the agent can't get for free:
  *   - `kb_search`  — find pages by content/filename anywhere, scoped to the vault;
  *   - `kb_sync`    — push/pull the vault to its (optionally gcrypt-encrypted) remote;
  *   - `/kb <req>`  — loads vault context and detects the mode (query / scan / ingest);
@@ -87,10 +87,10 @@ const listPages = (vault) => {
 
 const KICKOFF = (vault, req) => `You have access to the personal knowledge-base vault at \`${vault}\`. Operate on it from the current working directory using ABSOLUTE paths under that root — never cd. Use the \`kb_search\` tool to find pages from anywhere.
 
-First read \`${vault}/CLAUDE.md\` (vault rules) and \`${vault}/index.md\` (catalog), then follow them strictly. Detect the mode from my request and act:
+First read \`${vault}/AGENTS.md\` (vault rules) and \`${vault}/index.md\` (project map), then follow them strictly. Detect the mode from my request and act:
 - QUERY (a question about the vault): search, then synthesize an answer with [[wikilink]] citations. Do NOT write unless I ask.
 - SCAN ("осмотрись тут" / material in the CWD that belongs in the vault): survey the CWD, map files to vault pages, and output a PLAN only — wait for my confirmation before writing.
-- INGEST (a source to record, or my confirmation of a plan): run the ingest workflow — new pages get YAML front matter, update index.md, append a \`## [YYYY-MM-DD] ingest | <source>\` line to log.md, cross-reference with [[wikilinks]].
+- INGEST (a source to record, or my confirmation of a plan): run the ingest workflow — new pages get YAML front matter, append a \`## [YYYY-MM-DD] ingest | <source>\` line to log.md (update index.md only for a new project — it's a project map), cross-reference with [[wikilinks]].
 
 My request: ${req || "(none given — ask what I want, or default to QUERY mode)"}`;
 

@@ -28,8 +28,8 @@ if [ ! -d "$VAULT_DIR" ]; then
 fi
 VAULT_DIR="$(cd "$VAULT_DIR" && pwd)"
 
-if [ ! -f "$VAULT_DIR/CLAUDE.md" ]; then
-  echo "Warning: $VAULT_DIR has no CLAUDE.md — is this really a knowledge base vault?" >&2
+if [ ! -f "$VAULT_DIR/AGENTS.md" ]; then
+  echo "Warning: $VAULT_DIR has no AGENTS.md — is this really a knowledge base vault?" >&2
 fi
 
 # --- Claude Code skills ------------------------------------------------------

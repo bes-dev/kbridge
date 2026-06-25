@@ -174,7 +174,7 @@ Covers headings, **bold**, `code` and -/*/+ bullets — enough for chat answers.
   (let ((v (kb-vault)))
     (format "You are conversing inside my personal knowledge-base vault at `%s`. \
 Use the kb_search tool and read files under that path with ABSOLUTE paths (never cd). \
-Consult `%s/CLAUDE.md` (rules) and `%s/index.md` (catalog) as needed and follow them. \
+Consult `%s/AGENTS.md` (rules) and `%s/index.md` (project map) as needed and follow them. \
 Answer concisely and cite the pages you used as [[wikilinks]]. \
 Do NOT modify files unless I explicitly ask." v v v)))
 
@@ -358,8 +358,8 @@ so this `kill-emacs-hook' makes sure no `pi --mode rpc' process is orphaned."
         (when (markerp kb-chat--input-start)
           (delete-region (line-beginning-position) (point-max))))
       (kb-chat--submit
-       (concat "INGEST the following into the vault per CLAUDE.md "
-               "(choose location, add YAML front matter, update index.md and log.md, "
+       (concat "INGEST the following into the vault per AGENTS.md "
+               "(choose location, add YAML front matter, append to log.md, update index.md only if it's a new project, "
                "cross-reference with [[wikilinks]]). Report what you wrote.\n\n---\n" text)))))
 
 ;;;###autoload
