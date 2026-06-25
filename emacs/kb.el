@@ -13,10 +13,13 @@
 ;;   ;; for a local/private model, e.g.:
 ;;   ;; (setq kb-pi-model '("--model" "qwen/qwen3.6-27b"))
 ;;
-;; Keys (complement obsidian.el's C-c n …):
-;;   C-c n a  kb-chat            open the chat (RET sends, C-j newline, C-c C-k aborts)
-;;   C-c n i  kb-ingest-region   ask the agent to file the region into the vault
-;;   C-c n y  kb-sync            push / pull / status
+;; This library provides commands only; bind them in your config (recommended
+;; prefix `C-c k', e.g. via the use-package snippet at the bottom of this file):
+;;   C-c k k  kb-chat              open the chat (RET sends, C-j newline, C-c C-k aborts)
+;;   C-c k i  kb-ingest-region     file the region into the vault
+;;   C-c k b  kb-discuss-buffer    attach the current buffer/region (read-only; C-c C-e edits)
+;;   C-c k d  kb-discuss-directory attach the current dir (dired) to the chat
+;;   C-c k s  kb-sync              push / pull / status
 ;; In the chat, [[wikilinks]] in answers are clickable and open the page.
 
 ;;; Code:
@@ -135,6 +138,12 @@ Covers headings, **bold**, `code` and -/*/+ bullets — enough for chat answers.
 (defvar-local kb-chat--input-start nil "Marker where the editable input begins.")
 (defvar-local kb-chat--answer-start nil "Marker at the start of the current answer.")
 (defvar-local kb-chat--ctxfile nil "Temp file holding the KB system-prompt addendum.")
+(defvar-local kb-chat--tool nil "Name of the tool currently running, shown in the header.")
+(defvar-local kb-chat--pending nil "Context blocks to prepend to the next submitted message.")
+(defvar-local kb-chat--edit-file nil "Absolute path of the file attached for optional editing.")
+(defvar-local kb-chat--edit-srcbuf nil "Source buffer of the attached file, for live revert.")
+(defvar-local kb-chat--edit-on nil "Non-nil when edit-mode is enabled for the attached file.")
+(defvar-local kb-chat--seen-text nil "Non-nil once the current turn has emitted real text.")
 (defvar-local kb-chat--spinner-i 0)
 (defvar-local kb-chat--spinner-timer nil)
 (defvar kb-chat--spinner-frames ["⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏"])
@@ -142,9 +151,14 @@ Covers headings, **bold**, `code` and -/*/+ bullets — enough for chat answers.
 (defun kb-chat--header ()
   "Header-line for the chat buffer."
   (if kb-chat--busy
-      (format " %s  kb: thinking…    C-c C-k abort"
-              (aref kb-chat--spinner-frames (mod kb-chat--spinner-i (length kb-chat--spinner-frames))))
-    " kb chat · RET send · C-j newline · [[link]] opens page"))
+      (format " %s  kb: %s    C-c C-k abort"
+              (aref kb-chat--spinner-frames (mod kb-chat--spinner-i (length kb-chat--spinner-frames)))
+              (if kb-chat--tool (concat "⏳ " kb-chat--tool) "thinking…"))
+    (if kb-chat--edit-file
+        (format " kb · %s %s · C-c C-e toggle edit · RET send"
+                (if kb-chat--edit-on "✎ EDIT" "🔒 read-only")
+                (file-name-nondirectory kb-chat--edit-file))
+      " kb chat · RET send · C-j newline · [[link]] opens page")))
 
 (defun kb-chat--start-spinner (buffer)
   (with-current-buffer buffer
@@ -195,9 +209,21 @@ Do NOT modify files unless I explicitly ask." v v v)))
      ((equal type "message_update")
       (let ((ev (plist-get e :assistantMessageEvent)))
         (when (and ev (equal (plist-get ev :type) "text_delta"))
-          (kb-chat--emit buffer (or (plist-get ev :delta) "")))))
+          (when kb-chat--tool            ; a tool finished — drop it from the header
+            (setq kb-chat--tool nil) (force-mode-line-update))
+          (let ((delta (or (plist-get ev :delta) "")))
+            (if kb-chat--seen-text
+                (kb-chat--emit buffer delta)
+              ;; Swallow the blank/whitespace deltas the model emits around tool
+              ;; calls; left-trim the first chunk of real answer text.
+              (let ((trimmed (string-trim-left delta)))
+                (unless (string-empty-p trimmed)
+                  (setq kb-chat--seen-text t)
+                  (kb-chat--emit buffer trimmed))))))))
      ((equal type "tool_execution_start")
-      (kb-chat--emit buffer (format "\n  ⏳ %s\n" (or (plist-get e :toolName) "tool")) 'shadow))
+      ;; Show tool activity transiently in the header line, not in the transcript.
+      (setq kb-chat--tool (or (plist-get e :toolName) "tool"))
+      (force-mode-line-update))
      ((equal type "agent_end")
       (kb-chat--finish-turn buffer)))))
 
@@ -257,24 +283,25 @@ so this `kill-emacs-hook' makes sure no `pi --mode rpc' process is orphaned."
 
 ;;;; Turns
 
-(defun kb-chat--submit (msg)
-  "Render MSG as a user turn and send it to the RPC session (async)."
+(defun kb-chat--submit (msg &optional payload)
+  "Render MSG as a user turn; send PAYLOAD (defaults to MSG) to the RPC session.
+PAYLOAD lets the agent receive attached context while the transcript shows only MSG."
   (kb-chat--ensure-process (current-buffer))
   (let ((inhibit-read-only t))
     (goto-char (point-max))
     (insert (propertize "You: " 'face 'font-lock-keyword-face) msg "\n\n")
     (setq kb-chat--answer-start (point-marker)))
-  (setq kb-chat--busy t)
+  (setq kb-chat--busy t kb-chat--seen-text nil)
   (kb-chat--start-spinner (current-buffer))
   (force-mode-line-update)
   (process-send-string kb-chat--proc
-                       (concat (json-serialize (list :type "prompt" :message msg)) "\n")))
+                       (concat (json-serialize (list :type "prompt" :message (or payload msg))) "\n")))
 
 (defun kb-chat--finish-turn (buffer)
   "End the current turn in BUFFER: buttonize links and show a fresh prompt."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (setq kb-chat--busy nil)
+      (setq kb-chat--busy nil kb-chat--tool nil)
       (kb-chat--stop-spinner)
       (when (markerp kb-chat--answer-start)
         (let ((inhibit-read-only t))
@@ -294,9 +321,13 @@ so this `kill-emacs-hook' makes sure no `pi --mode rpc' process is orphaned."
   (let ((msg (string-trim (buffer-substring-no-properties
                            (or kb-chat--input-start (point-min)) (point-max)))))
     (when (string-empty-p msg) (user-error "Type a message first"))
-    (let ((inhibit-read-only t))
-      (delete-region (line-beginning-position) (point-max)))
-    (kb-chat--submit msg)))
+    (let ((payload (if kb-chat--pending
+                       (concat (mapconcat #'identity kb-chat--pending "\n\n") "\n\n" msg)
+                     msg)))
+      (setq kb-chat--pending nil)
+      (let ((inhibit-read-only t))
+        (delete-region (line-beginning-position) (point-max)))
+      (kb-chat--submit msg payload))))
 
 (defun kb-chat-abort ()
   "Abort the current turn (keeps the session alive)."
@@ -314,6 +345,7 @@ so this `kill-emacs-hook' makes sure no `pi --mode rpc' process is orphaned."
     (define-key m (kbd "C-c C-c") #'kb-chat-send)
     (define-key m (kbd "C-j") #'newline)
     (define-key m (kbd "C-c C-k") #'kb-chat-abort)
+    (define-key m (kbd "C-c C-e") #'kb-chat-toggle-edit)
     m)
   "Keymap for `kb-chat-mode'.")
 
@@ -379,11 +411,115 @@ so this `kill-emacs-hook' makes sure no `pi --mode rpc' process is orphaned."
                        (message "kb-sync %s: %s" action (string-trim (buffer-string))))))))
     (message "kb-sync %s…" action)))
 
-;;;; Keybindings (under obsidian.el's C-c n namespace)
+;;;; Attach context (current buffer / directory) to the chat
 
-(global-set-key (kbd "C-c n a") #'kb-chat)
-(global-set-key (kbd "C-c n i") #'kb-ingest-region)
-(global-set-key (kbd "C-c n y") #'kb-sync)
+(defun kb--lang-hint ()
+  "A markdown fence language guessed from the current major mode."
+  (replace-regexp-in-string "\\(-ts\\)?-mode\\'" "" (symbol-name major-mode)))
+
+(defun kb--dir-listing (dir)
+  "A one-level listing of DIR, directories marked with a trailing slash."
+  (let ((fs (delete "." (delete ".." (directory-files dir)))))
+    (mapconcat (lambda (f)
+                 (concat f (if (file-directory-p (expand-file-name f dir)) "/" "")))
+               fs "\n")))
+
+(defun kb-chat--attach (label block)
+  "Open/focus the chat, stash BLOCK as pending context, note LABEL in the transcript.
+The block is prepended to the next message you send, so the agent gets the context
+while the transcript shows only your question."
+  (kb-chat)
+  (with-current-buffer kb-chat-buffer
+    (setq kb-chat--pending (append kb-chat--pending (list block)))
+    (unless kb-chat--busy
+      (let ((inhibit-read-only t))
+        (save-excursion
+          (when (markerp kb-chat--input-start)
+            (goto-char kb-chat--input-start)
+            (forward-line 0)
+            (insert (propertize (format "📎 %s\n" label) 'face 'shadow))))))
+    (message "kb: attached %s — type your question and press RET" label)))
+
+;;;###autoload
+(defun kb-discuss-buffer ()
+  "Attach the current buffer (or active region) to the kb chat, read-only.
+Inside the chat, `C-c C-e' toggles edit-mode for a file-backed buffer so the
+agent may edit it in place."
+  (interactive)
+  (let* ((file (buffer-file-name))
+         (name (or file (buffer-name)))
+         (srcbuf (current-buffer))
+         (region (use-region-p))
+         (beg (if region (region-beginning) (point-min)))
+         (end (if region (region-end) (point-max)))
+         (lang (kb--lang-hint))
+         (content (buffer-substring-no-properties beg end))
+         (label (format "%s%s%s" (file-name-nondirectory name) (if region " (region)" "")
+                        (if file " · read-only, C-c C-e to edit" "")))
+         (block (format "Файл для обсуждения (READ-ONLY — не редактируй, пока я не разрешу) — `%s`%s:\n\n```%s\n%s\n```"
+                        name (if region " (выделенный фрагмент)" "") lang content)))
+    (kb-chat--attach label block)
+    (with-current-buffer kb-chat-buffer
+      (setq kb-chat--edit-file (and file (expand-file-name file))
+            kb-chat--edit-srcbuf (and file srcbuf)
+            kb-chat--edit-on nil)
+      (force-mode-line-update))))
+
+(defun kb-chat-toggle-edit ()
+  "Toggle edit-mode for the file attached to this chat (see `kb-discuss-buffer').
+On: save & auto-revert the source buffer and tell the agent it may edit the file
+in place.  Off: back to read-only."
+  (interactive)
+  (unless (derived-mode-p 'kb-chat-mode) (user-error "Not a kb chat buffer"))
+  (unless kb-chat--edit-file
+    (user-error "No file attached — run `C-c k b' on a file-backed buffer first"))
+  (setq kb-chat--edit-on (not kb-chat--edit-on))
+  (if kb-chat--edit-on
+      (progn
+        (when (buffer-live-p kb-chat--edit-srcbuf)
+          (with-current-buffer kb-chat--edit-srcbuf
+            (when (buffer-modified-p) (save-buffer))
+            (auto-revert-mode 1)))
+        (setq kb-chat--pending
+              (append kb-chat--pending
+                      (list (format "Теперь можешь РЕДАКТИРОВАТЬ файл `%s` на месте своими \
+edit/write-инструментами (только его; сначала прочитай для точных совпадений)."
+                                    kb-chat--edit-file))))
+        (let ((inhibit-read-only t))
+          (save-excursion
+            (when (markerp kb-chat--input-start)
+              (goto-char kb-chat--input-start) (forward-line 0)
+              (insert (propertize (format "✎ edit-mode ON · %s\n"
+                                          (file-name-nondirectory kb-chat--edit-file))
+                                  'face 'shadow)))))
+        (message "kb: edit-mode ON — %s" (file-name-nondirectory kb-chat--edit-file)))
+    (when (buffer-live-p kb-chat--edit-srcbuf)
+      (with-current-buffer kb-chat--edit-srcbuf (auto-revert-mode -1)))
+    (message "kb: edit-mode OFF (read-only)"))
+  (force-mode-line-update))
+
+;;;###autoload
+(defun kb-discuss-directory ()
+  "Attach the current directory (dired or `default-directory') to the kb chat."
+  (interactive)
+  (let* ((dir (expand-file-name
+               (if (derived-mode-p 'dired-mode) (dired-current-directory) default-directory)))
+         (block (format "Рабочая папка для обсуждения — `%s`. \
+Работай с файлами под ней по АБСОЛЮТНЫМ путям, CWD не меняй.\n\nСодержимое:\n```\n%s\n```"
+                        dir (kb--dir-listing dir))))
+    (kb-chat--attach (format "📁 %s" (abbreviate-file-name dir)) block)))
+
+;;;; Keybindings — none installed here. Bind in your config under a free prefix
+;; (recommended `C-c k', which avoids obsidian.el's `C-c n' map). With use-package:
+;;
+;;   (use-package kb
+;;     :load-path "/path/to/kbridge/emacs"
+;;     :commands (kb-open-page)
+;;     :bind (("C-c k k" . kb-chat)
+;;            ("C-c k i" . kb-ingest-region)
+;;            ("C-c k b" . kb-discuss-buffer)
+;;            ("C-c k d" . kb-discuss-directory)
+;;            ("C-c k s" . kb-sync)))
 
 (provide 'kb)
 ;;; kb.el ends here

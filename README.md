@@ -63,12 +63,18 @@ it rather than duplicating the rules.
 - kbridge installed (`./setup.sh`), so `~/.claude/skills/kb/vault_path` exists.
 - a Pi provider/model configured — point Pi at a **local model** for a fully private KB.
 
-Minimal (vanilla):
+Minimal (vanilla). `kb.el` ships commands only — bind them under a free prefix (`C-c k` keeps
+clear of `obsidian.el`'s `C-c n` map):
 
 ```elisp
 (add-to-list 'load-path "/path/to/kbridge/emacs")
 (require 'kb)
 (setq kb-pi-model '("--model" "qwen/qwen3.6-27b"))   ; your local model; omit for Pi's default
+(global-set-key (kbd "C-c k k") #'kb-chat)
+(global-set-key (kbd "C-c k i") #'kb-ingest-region)
+(global-set-key (kbd "C-c k b") #'kb-discuss-buffer)
+(global-set-key (kbd "C-c k d") #'kb-discuss-directory)
+(global-set-key (kbd "C-c k s") #'kb-sync)
 ```
 
 With `use-package` + `straight.el` (deferred — loads on first use):
@@ -77,10 +83,12 @@ With `use-package` + `straight.el` (deferred — loads on first use):
 (use-package kb
   :straight nil
   :load-path "/path/to/kbridge/emacs"
-  :commands (kb-chat kb-ingest-region kb-sync)
-  :bind (("C-c n a" . kb-chat)
-         ("C-c n i" . kb-ingest-region)
-         ("C-c n y" . kb-sync))
+  :commands (kb-open-page)
+  :bind (("C-c k k" . kb-chat)              ; open the chat
+         ("C-c k i" . kb-ingest-region)     ; file the region into the vault
+         ("C-c k b" . kb-discuss-buffer)    ; attach this buffer/region (read-only)
+         ("C-c k d" . kb-discuss-directory) ; attach this dir (works in dired)
+         ("C-c k s" . kb-sync))             ; push / pull / status
   :init (setq kb-pi-model '("--model" "qwen/qwen3.6-27b")))
 ```
 
@@ -103,16 +111,25 @@ editing and `[[wikilinks]]` are already handled far better by `obsidian.el`/`mar
 opens a **streaming, multi-turn chat** with the vault, backed by a persistent `pi --mode rpc`
 process — so you can run a **local model for privacy**, the conversation keeps its memory across
 turns, tokens stream in live, and the single-threaded Emacs UI never blocks. See
-[Emacs setup](#emacs-setup) to install it.
+[Emacs setup](#emacs-setup) to install it. Keys live under their own `C-c k` prefix:
 
-- `C-c n a` `kb-chat` — open the chat (a normal, splittable window by default). Type a message,
+- `C-c k k` `kb-chat` — open the chat (a normal, splittable window by default). Type a message,
   `RET` sends, `C-j` inserts a newline, `C-c C-k` aborts the current turn (the session stays
-  alive). Answers stream live with a header-line spinner; tool calls (e.g. `kb_search`) show
-  inline; `[[wikilinks]]` in answers are clickable and open the page.
-- `C-c n i` `kb-ingest-region` — hand the region to the chat agent to file into the vault.
-- `C-c n y` `kb-sync` — push / pull / status via the same `kb-sync` script.
+  alive). Answers stream live with a header-line spinner that also names the active tool
+  (e.g. `kb_search`); `[[wikilinks]]` in answers are clickable and open the page.
+- `C-c k b` `kb-discuss-buffer` — attach the current buffer (or active region) to the chat as
+  **read-only** context. The header shows `🔒 read-only`; press `C-c C-e` in the chat to flip to
+  `✎ EDIT` — the source file gets `auto-revert` and the agent may edit it in place (your next
+  message carries the grant). `C-c C-e` again returns to read-only.
+- `C-c k d` `kb-discuss-directory` — attach the current directory (a dired folder, else
+  `default-directory`) plus a one-level listing, so the agent works in it by absolute path.
+- `C-c k i` `kb-ingest-region` — hand the region to the chat agent to file into the vault.
+- `C-c k s` `kb-sync` — push / pull / status via the same `kb-sync` script.
 
-The vault path comes from the same recorded `vault_path`, so Emacs, Pi and Claude stay in sync.
+Attached context shows as a `📎` line and rides your **next** message, so the transcript shows only
+your question. Tool activity (`kb_search`, `read`, …) appears transiently in the **header line**,
+not in the transcript. The vault path comes from the same recorded `vault_path`, so Emacs, Pi and
+Claude stay in sync.
 
 ## Encrypted sync (optional)
 
@@ -174,7 +191,7 @@ kbridge/
 │   ├── package.json
 │   └── kb-harness.mjs             # Pi ext: /kb /kb-sync commands + kb_search/kb_sync tools
 └── emacs/
-    └── kb.el                      # Emacs: streaming RPC chat (kb-chat / kb-ingest / kb-sync)
+    └── kb.el                      # Emacs: streaming RPC chat + buffer/dir context + edit-mode
 ```
 
 ## License
