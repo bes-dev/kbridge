@@ -50,6 +50,7 @@ claude "/kb осмотрись тут, это для проекта Y"  # scan t
 - `kb_search` — a tool the model can call to find pages by content or filename, scoped to the
   vault, from anywhere.
 - `kb_sync` — a tool to push/pull the vault to its (optionally encrypted) remote (see below).
+- `/kb-index-chats` — toggle whether `chats/` (saved transcripts) is included in search; **off by default** (see [Saved chats](#saved-chats)).
 
 The vault's own `AGENTS.md` is the source of truth for conventions — kbridge points the agent at
 it rather than duplicating the rules.
@@ -126,10 +127,28 @@ turns, tokens stream in live, and the single-threaded Emacs UI never blocks. See
 - `C-c k i` `kb-ingest-region` — hand the region to the chat agent to file into the vault.
 - `C-c k s` `kb-sync` — push / pull / status via the same `kb-sync` script.
 
+Inside the chat, `C-c C-i` toggles whether `chats/` is searched (the header shows `chats:on/off`),
+and `C-x C-s` saves the transcript into the vault's `chats/` (the buffer isn't file-visiting, so it
+prompts for a name there) — a manual, opt-in way to keep a session.
+
 Attached context shows as a `📎` line and rides your **next** message, so the transcript shows only
 your question. Tool activity (`kb_search`, `read`, …) appears transiently in the **header line**,
 not in the transcript. The vault path comes from the same recorded `vault_path`, so Emacs, Pi and
 Claude stay in sync.
+
+## Saved chats
+
+Chats are ephemeral by default — the value is what you *distill* into the vault, not the raw
+transcript. But you can keep a session when you want: in the Emacs chat, `C-x C-s` writes the
+buffer to `<vault>/chats/` (created on first save).
+
+`chats/` is a **manual drop-spot, not a managed layer** — and it's **excluded from search by
+default** so old chatter doesn't dilute retrieval. Toggle it into the index when you want to recall
+from past chats, via a shared flag (`~/.claude/skills/kb/index_chats`) that all three agents read:
+
+- **Pi** — `/kb-index-chats`
+- **Emacs** — `C-c C-i` in the chat (header shows `chats:on/off`)
+- **Claude** — ask `/kb` to include/exclude chats
 
 ## Encrypted sync (optional)
 
@@ -185,13 +204,14 @@ kbridge/
 ├── .claude/skills/kb/
 │   ├── SKILL.md                   # Claude Code /kb skill
 │   ├── kb-sync                    # shared sync script (plain / gcrypt-encrypted remote)
-│   ├── vault_path                 # recorded vault path (gitignored; read by both)
-│   └── sync_remote                # recorded remote URL (gitignored; read by both)
+│   ├── vault_path                 # recorded vault path (gitignored; read by all)
+│   ├── sync_remote                # recorded remote URL (gitignored; read by all)
+│   └── index_chats                # flag: include chats/ in search (gitignored; toggle)
 ├── pi/
 │   ├── package.json
 │   └── kb-harness.mjs             # Pi ext: /kb /kb-sync commands + kb_search/kb_sync tools
 └── emacs/
-    └── kb.el                      # Emacs: streaming RPC chat + buffer/dir context + edit-mode
+    └── kb.el                      # Emacs: streaming RPC chat + context/edit + chats toggle
 ```
 
 ## License
