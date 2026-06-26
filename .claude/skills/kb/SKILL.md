@@ -23,6 +23,8 @@ Always start by reading:
 
 These define how to operate on the vault. Follow them strictly for the rest of the session. Never change CWD — use absolute paths under `$VAULT/`.
 
+**Search scope — `chats/` is excluded by default.** `$VAULT/chats/` holds saved raw chat transcripts (noise). Before searching, check whether `~/.claude/skills/kb/index_chats` exists (e.g. `test -f`): if it is **absent** (the default), NEVER search or read `chats/` (pass `--exclude-dir=chats` to grep / skip it in globs); if it is **present**, the user has opted in — treat `chats/` like any other folder. To **toggle**: if the user asks to include/exclude `chats/` in search, create or remove that flag file via Bash (`touch` / `rm`) and confirm (this is the same flag Pi's `/kb-index-chats` and Emacs `C-c C-i` set).
+
 ## Step 2 — Detect mode from the user's intent
 
 Pick exactly one mode based on what the user said when invoking `/kb`:
@@ -55,6 +57,7 @@ Behavior: execute the ingest workflow from the vault AGENTS.md. Every new page g
 - Never modify files in `raw/` — those are immutable source materials.
 - All new pages use YAML front matter and relative `[[wikilinks]]`.
 - One topic per page; split if a page grows too long.
+- Never search or read `chats/` unless the user asks or `~/.claude/skills/kb/index_chats` exists (it's excluded from the index by default — see Step 1).
 - In scan-and-propose mode, always present the plan and wait for confirmation before writing.
 - If a question is better answered by checking the current state of the vault than by guessing, read the files first.
 

@@ -20,7 +20,8 @@
 ;;   C-c k b  kb-discuss-buffer    attach the current buffer/region (read-only; C-c C-e edits)
 ;;   C-c k d  kb-discuss-directory attach the current dir (dired) to the chat
 ;;   C-c k s  kb-sync              push / pull / status
-;; In the chat, [[wikilinks]] in answers are clickable and open the page.
+;; In the chat: `C-c C-e' toggles edit-mode, `C-c C-i' includes/excludes chats/ in
+;; search, and [[wikilinks]] in answers are clickable and open the page.
 
 ;;; Code:
 
@@ -50,6 +51,11 @@ Written by kbridge's setup.sh and shared with the Pi and Claude integrations."
 
 (defcustom kb-sync-program (expand-file-name "~/.claude/skills/kb/kb-sync")
   "Path to kbridge's kb-sync script." :type 'file :group 'kb)
+
+(defcustom kb-index-chats-file (expand-file-name "~/.claude/skills/kb/index_chats")
+  "Flag file shared with the Pi/Claude harnesses.
+When it exists, `chats/' is included in kb search; absent (default) it is excluded."
+  :type 'file :group 'kb)
 
 (defcustom kb-chat-display-action nil
   "ACTION passed to `pop-to-buffer' for the chat buffer.
@@ -154,11 +160,12 @@ Covers headings, **bold**, `code` and -/*/+ bullets — enough for chat answers.
       (format " %s  kb: %s    C-c C-k abort"
               (aref kb-chat--spinner-frames (mod kb-chat--spinner-i (length kb-chat--spinner-frames)))
               (if kb-chat--tool (concat "⏳ " kb-chat--tool) "thinking…"))
-    (if kb-chat--edit-file
-        (format " kb · %s %s · C-c C-e toggle edit · RET send"
-                (if kb-chat--edit-on "✎ EDIT" "🔒 read-only")
-                (file-name-nondirectory kb-chat--edit-file))
-      " kb chat · RET send · C-j newline · [[link]] opens page")))
+    (let ((chats (if (file-exists-p kb-index-chats-file) "on" "off")))
+      (if kb-chat--edit-file
+          (format " kb · %s %s · C-c C-e edit · C-c C-i chats:%s · RET send"
+                  (if kb-chat--edit-on "✎ EDIT" "🔒 read-only")
+                  (file-name-nondirectory kb-chat--edit-file) chats)
+        (format " kb chat · RET · C-c C-i chats:%s · [[link]] opens page" chats)))))
 
 (defun kb-chat--start-spinner (buffer)
   (with-current-buffer buffer
@@ -346,6 +353,7 @@ PAYLOAD lets the agent receive attached context while the transcript shows only 
     (define-key m (kbd "C-j") #'newline)
     (define-key m (kbd "C-c C-k") #'kb-chat-abort)
     (define-key m (kbd "C-c C-e") #'kb-chat-toggle-edit)
+    (define-key m (kbd "C-c C-i") #'kb-chat-toggle-chats-index)
     m)
   "Keymap for `kb-chat-mode'.")
 
@@ -363,10 +371,13 @@ PAYLOAD lets the agent receive attached context while the transcript shows only 
     (with-current-buffer buf
       (unless (derived-mode-p 'kb-chat-mode) (kb-chat-mode))
       (kb-chat--ensure-process buf)
+      ;; Default `C-x C-s' into the vault's chats/ — manual, opt-in session export
+      ;; (the chat buffer isn't file-visiting, so save-buffer prompts for a name).
+      (setq default-directory (file-name-as-directory (expand-file-name "chats" (kb-vault))))
       (when (= (point-max) (point-min))
         (let ((inhibit-read-only t))
           (insert (propertize
-                   (format "kb chat · %s\n\n"
+                   (format "kb chat · %s · C-x C-s → chats/\n\n"
                            (file-name-nondirectory (directory-file-name (kb-vault))))
                    'face 'shadow))
           (insert (propertize "❯ " 'face 'minibuffer-prompt))
@@ -496,6 +507,18 @@ edit/write-инструментами (только его; сначала пр�
     (when (buffer-live-p kb-chat--edit-srcbuf)
       (with-current-buffer kb-chat--edit-srcbuf (auto-revert-mode -1)))
     (message "kb: edit-mode OFF (read-only)"))
+  (force-mode-line-update))
+
+(defun kb-chat-toggle-chats-index ()
+  "Toggle whether `chats/' is included in kb search (shared with Pi/Claude).
+Writes/removes the `kb-index-chats-file' flag the harnesses read; OFF by default."
+  (interactive)
+  (if (file-exists-p kb-index-chats-file)
+      (progn (delete-file kb-index-chats-file)
+             (message "kb: chats/ excluded from search"))
+    (make-directory (file-name-directory kb-index-chats-file) t)
+    (write-region "on\n" nil kb-index-chats-file)
+    (message "kb: chats/ included in search"))
   (force-mode-line-update))
 
 ;;;###autoload

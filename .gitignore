@@ -1,4 +1,5 @@
 .claude/skills/kb/vault_path
 .claude/skills/kb/sync_remote
+.claude/skills/kb/index_chats
 node_modules/
 .DS_Store

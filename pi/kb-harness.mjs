@@ -55,6 +55,17 @@ const resolveSyncBin = () => {
 	return cands.find((f) => fs.existsSync(f)) || null;
 };
 
+// chats/ holds saved raw transcripts. It's EXCLUDED from kb_search by default
+// (noise), included only when the shared `index_chats` flag file exists. Toggled
+// via /kb-index-chats; read by all three harnesses (Pi, Claude skill, Emacs).
+const indexChatsFile = () => path.join(HOME, ".claude/skills/kb/index_chats");
+const chatsIndexed = () => {
+	for (const f of [path.join(HERE, "..", ".claude/skills/kb/index_chats"), indexChatsFile()]) {
+		try { if (fs.existsSync(f)) return true; } catch {}
+	}
+	return false;
+};
+
 const text = (s) => ({ content: [{ type: "text", text: String(s).slice(0, 8000) || "(no output)" }], details: {} });
 
 function run(cmd, args) {
@@ -87,7 +98,7 @@ const listPages = (vault) => {
 
 const KICKOFF = (vault, req) => `You have access to the personal knowledge-base vault at \`${vault}\`. Operate on it from the current working directory using ABSOLUTE paths under that root — never cd. Use the \`kb_search\` tool to find pages from anywhere.
 
-First read \`${vault}/AGENTS.md\` (vault rules) and \`${vault}/index.md\` (project map), then follow them strictly. Detect the mode from my request and act:
+First read \`${vault}/AGENTS.md\` (vault rules) and \`${vault}/index.md\` (project map), then follow them strictly. \`chats/\` holds saved raw transcripts and is excluded from search by default — ignore it unless I ask. Detect the mode from my request and act:
 - QUERY (a question about the vault): search, then synthesize an answer with [[wikilink]] citations. Do NOT write unless I ask.
 - SCAN ("осмотрись тут" / material in the CWD that belongs in the vault): survey the CWD, map files to vault pages, and output a PLAN only — wait for my confirmation before writing.
 - INGEST (a source to record, or my confirmation of a plan): run the ingest workflow — new pages get YAML front matter, append a \`## [YYYY-MM-DD] ingest | <source>\` line to log.md (update index.md only for a new project — it's a project map), cross-reference with [[wikilinks]].
@@ -109,8 +120,11 @@ export default function install(pi) {
 			const vault = resolveVault();
 			if (!vault) return text("KB vault not configured — run the harness setup.sh (or set $KB_VAULT).");
 			const q = p.query;
-			const content = await run("grep", ["-rIn", "-i", "--include=*.md", "-e", q, vault]);
-			const files = await run("find", [vault, "-name", "*.md", "-not", "-path", "*/.git/*"]);
+			const gargs = ["-rIn", "-i", "--include=*.md"];
+			const fargs = [vault, "-name", "*.md", "-not", "-path", "*/.git/*"];
+			if (!chatsIndexed()) { gargs.push("--exclude-dir=chats"); fargs.push("-not", "-path", "*/chats/*"); }
+			const content = await run("grep", [...gargs, "-e", q, vault]);
+			const files = await run("find", fargs);
 			const named = files.out.split("\n").filter((f) => f && path.basename(f).toLowerCase().includes(q.toLowerCase()));
 			const rel = (s) => s.split(vault + "/").join("");
 			const body = content.out.split("\n").slice(0, 60).map(rel).join("\n");
@@ -136,6 +150,19 @@ export default function install(pi) {
 			const parts = args.trim().split(/\s+/).filter(Boolean);
 			const out = await runSync(parts.length ? parts : ["status"]);
 			pi.sendUserMessage("```\n" + out.slice(0, 4000) + "\n```");
+		},
+	});
+
+	pi.registerCommand("kb-index-chats", {
+		description: "Toggle whether chats/ is included in kb search (default: excluded).",
+		handler: async () => {
+			const f = indexChatsFile();
+			let on;
+			try {
+				if (fs.existsSync(f)) { fs.unlinkSync(f); on = false; }
+				else { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, "on\n"); on = true; }
+			} catch (e) { return void pi.sendUserMessage("kb: couldn't toggle index_chats — " + e.message); }
+			pi.sendUserMessage(`kb: chats/ ${on ? "**included in**" : "**excluded from**"} search.`);
 		},
 	});
 
