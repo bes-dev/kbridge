@@ -128,8 +128,8 @@ turns, tokens stream in live, and the single-threaded Emacs UI never blocks. See
 - `C-c k s` `kb-sync` — push / pull / status via the same `kb-sync` script.
 
 Inside the chat, `C-c C-i` toggles whether `chats/` is searched (the header shows `chats:on/off`),
-and `C-x C-s` saves the transcript into the vault's `chats/` (the buffer isn't file-visiting, so it
-prompts for a name there) — a manual, opt-in way to keep a session.
+and `C-x C-s` saves the transcript into the vault's `chats/`, suggesting a `<date>-<slug>.md` name
+— a manual, opt-in way to keep a session.
 
 Attached context shows as a `📎` line and rides your **next** message, so the transcript shows only
 your question. Tool activity (`kb_search`, `read`, …) appears transiently in the **header line**,
@@ -140,7 +140,8 @@ Claude stay in sync.
 
 Chats are ephemeral by default — the value is what you *distill* into the vault, not the raw
 transcript. But you can keep a session when you want: in the Emacs chat, `C-x C-s` writes the
-buffer to `<vault>/chats/` (created on first save).
+buffer to `<vault>/chats/` (created on first save), suggesting a `<date>-<slug>.md` name derived
+from your first message.
 
 `chats/` is a **manual drop-spot, not a managed layer** — and it's **excluded from search by
 default** so old chatter doesn't dilute retrieval. Toggle it into the index when you want to recall

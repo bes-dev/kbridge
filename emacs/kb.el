@@ -354,6 +354,7 @@ PAYLOAD lets the agent receive attached context while the transcript shows only 
     (define-key m (kbd "C-c C-k") #'kb-chat-abort)
     (define-key m (kbd "C-c C-e") #'kb-chat-toggle-edit)
     (define-key m (kbd "C-c C-i") #'kb-chat-toggle-chats-index)
+    (define-key m (kbd "C-x C-s") #'kb-chat-save)
     m)
   "Keymap for `kb-chat-mode'.")
 
@@ -520,6 +521,29 @@ Writes/removes the `kb-index-chats-file' flag the harnesses read; OFF by default
     (write-region "on\n" nil kb-index-chats-file)
     (message "kb: chats/ included in search"))
   (force-mode-line-update))
+
+(defun kb-chat--slug ()
+  "A short filename slug from the first user message in this chat, or \"chat\"."
+  (save-excursion
+    (goto-char (point-min))
+    (if (re-search-forward "^You: \\(.+\\)$" nil t)
+        (let* ((s (downcase (match-string-no-properties 1)))
+               (s (replace-regexp-in-string "[^[:alnum:]]+" "-" s))
+               (s (replace-regexp-in-string "\\`-+\\|-+\\'" "" s)))
+          (if (string-empty-p s) "chat" (substring s 0 (min 40 (length s)))))
+      "chat")))
+
+(defun kb-chat-save ()
+  "Save the chat transcript, suggesting `<date>-<slug>.md' in the vault's chats/.
+Once saved, the buffer visits that file so further `C-x C-s' just updates it."
+  (interactive)
+  (if buffer-file-name
+      (save-buffer)
+    (let* ((dir (file-name-as-directory (expand-file-name "chats" (kb-vault))))
+           (default (concat (format-time-string "%Y-%m-%d-") (kb-chat--slug) ".md"))
+           (file (read-file-name "Save chat to: " dir nil nil default)))
+      (make-directory (file-name-directory file) t)
+      (write-file file))))
 
 ;;;###autoload
 (defun kb-discuss-directory ()
