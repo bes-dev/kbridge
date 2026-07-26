@@ -2,7 +2,7 @@
 name: kb
 description: Talk to the personal knowledge base from any folder. Query the vault, scan the current folder for material that fits the vault, or write new entries. Works without changing CWD.
 user-invocable: true
-allowed-tools: "Read, Write, Edit, Glob, Grep, Bash, Agent"
+allowed-tools: "Read, Write, Edit, Glob, Grep, Bash, PowerShell, Agent"
 ---
 
 # /kb — Knowledge Base Access
@@ -23,7 +23,7 @@ Always start by reading:
 
 These define how to operate on the vault. Follow them strictly for the rest of the session. Never change CWD — use absolute paths under `$VAULT/`.
 
-**Search scope — `chats/` is excluded by default.** `$VAULT/chats/` holds saved raw chat transcripts (noise). Before searching, check whether `~/.claude/skills/kb/index_chats` exists (e.g. `test -f`): if it is **absent** (the default), NEVER search or read `chats/` (pass `--exclude-dir=chats` to grep / skip it in globs); if it is **present**, the user has opted in — treat `chats/` like any other folder. To **toggle**: if the user asks to include/exclude `chats/` in search, create or remove that flag file via Bash (`touch` / `rm`) and confirm (this is the same flag Pi's `/kb-index-chats` and Emacs `C-c C-i` set).
+**Search scope — `chats/` is excluded by default.** `$VAULT/chats/` holds saved raw chat transcripts (noise). Before searching, check whether `~/.claude/skills/kb/index_chats` exists (portable: Glob for it; or `test -f` on Unix, `Test-Path` on Windows): if it is **absent** (the default), NEVER search or read `chats/` — discard any Grep/Glob matches under `chats/`; if it is **present**, the user has opted in — treat `chats/` like any other folder. To **toggle**: if the user asks to include/exclude `chats/` in search, create the flag file (Write an empty file) or delete it (`rm` on Unix, `Remove-Item` on Windows) and confirm (this is the same flag Pi's `/kb-index-chats` and Emacs `C-c C-i` set).
 
 ## Step 2 — Detect mode from the user's intent
 
@@ -36,7 +36,7 @@ Behavior: search the vault by filename and content, synthesize an answer with `[
 ### Scan-and-propose mode
 Triggers: "осмотрись тут", "что здесь полезного для проекта X", invocation from a CWD outside the vault with a hint about where the material might belong.
 Behavior:
-1. Survey CWD with depth-limited `ls` / `find`. Skip junk (`.git`, `node_modules`, `__pycache__`, build artifacts, large binaries, lockfiles).
+1. Survey CWD with Glob / a depth-limited directory listing. Skip junk (`.git`, `node_modules`, `__pycache__`, build artifacts, large binaries, lockfiles).
 2. If the candidate set is large (>50 files) or deeply nested, spawn an `Agent` (`subagent_type: Explore`) to triage and return a compact report — protects the main context.
 3. Read `index.md` (the project map) and the relevant `projects/<name>/context.md` to understand the target. If no project hint was given, propose the closest match based on content.
 4. Output a **plan only** — do not write anything yet. The plan should specify:
@@ -71,3 +71,5 @@ The vault can be backed by a remote — optionally end-to-end-encrypted via `git
 - `kb-sync init <gcrypt-remote-url> [gpg-key-id]` — export the existing vault to a new encrypted remote (one-time). Omit the key id for a symmetric passphrase.
 
 Only act on sync when the user asks, or offer it after writing. Note: this protects the remote (cloud sees only ciphertext); local device-loss is covered by full-disk encryption, not by this skill.
+
+`kb-sync` is a bash script: on Windows it needs Git Bash (Git for Windows) — run it as `bash ~/.claude/skills/kb/kb-sync <cmd>`. If bash is unavailable, tell the user sync is not set up on this machine and continue without it; encrypted (`gcrypt::`) remotes are not supported on Windows.

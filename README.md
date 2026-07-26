@@ -32,6 +32,30 @@ cd kbridge
 2. records the vault path (read by both harnesses),
 3. installs the Pi extension globally via `pi install ./pi` (if `pi` is on `PATH`).
 
+### Windows (Claude desktop app / Claude Code)
+
+No admin rights needed. From the cloned repo, in PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File setup.ps1 -VaultPath C:\path\to\vault
+```
+
+`setup.ps1` **copies** the `/kb` skill into `%USERPROFILE%\.claude\skills\` (symlinks need
+admin/Developer Mode on Windows) and records the vault path there. Re-run it after a `git pull`
+to refresh; your local state (`vault_path`, `sync_remote`, `index_chats`) survives re-runs.
+
+That's the whole setup: `/kb` then works in Claude Code — the CLI and the Claude desktop app
+share the same `~\.claude\skills\` — using Claude's built-in cross-platform tools. Note the
+skill is a *Claude Code* skill; the plain chat side of the desktop app doesn't load skills.
+
+Optional extras on Windows:
+
+- **Sync** — install [Git for Windows](https://gitforwindows.org/) (has a per-user, no-admin
+  installer). Claude Code then uses Git Bash for its Bash tool, and `kb-sync` works with a plain
+  git remote. Encrypted `gcrypt::` remotes are **not supported** on Windows.
+- **Pi / Emacs** — not covered by `setup.ps1`; the Pi extension currently shells out to
+  Unix `grep`/`find` and is not Windows-ready.
+
 ## Use
 
 **Claude Code** — from any directory:
@@ -202,6 +226,7 @@ local-only.
 ```
 kbridge/
 ├── setup.sh                       # installs both harnesses, records vault_path
+├── setup.ps1                      # Windows: copies the Claude skill per-user, no admin
 ├── .claude/skills/kb/
 │   ├── SKILL.md                   # Claude Code /kb skill
 │   ├── kb-sync                    # shared sync script (plain / gcrypt-encrypted remote)
