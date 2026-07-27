@@ -57,7 +57,7 @@ done
 KB_SRC="$SRC_SKILLS_DIR/kb"
 if [ -d "$KB_SRC" ]; then
   echo "$VAULT_DIR" > "$KB_SRC/vault_path"
-  [ -f "$KB_SRC/kb-sync" ] && chmod +x "$KB_SRC/kb-sync"
+  for s in kb-sync kb-convert; do [ -f "$KB_SRC/$s" ] && chmod +x "$KB_SRC/$s"; done
 fi
 
 # --- Pi extension ------------------------------------------------------------

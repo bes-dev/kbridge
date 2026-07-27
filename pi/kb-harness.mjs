@@ -49,9 +49,9 @@ const resolveSyncRemote = () => {
 	return null;
 };
 
-const resolveSyncBin = () => {
-	const cands = process.env.KB_SYNC_BIN ? [process.env.KB_SYNC_BIN] : [];
-	cands.push(path.join(HOME, ".claude/skills/kb/kb-sync"), path.join(HERE, "..", ".claude/skills/kb/kb-sync"));
+const resolveSkillBin = (name, envVar) => {
+	const cands = envVar && process.env[envVar] ? [process.env[envVar]] : [];
+	cands.push(path.join(HOME, ".claude/skills/kb", name), path.join(HERE, "..", ".claude/skills/kb", name));
 	return cands.find((f) => fs.existsSync(f)) || null;
 };
 
@@ -74,16 +74,19 @@ function run(cmd, args) {
 	);
 }
 
-// Sync can hit the network and writes to stderr on failure — capture both streams, longer timeout.
-function runSync(args) {
-	const bin = resolveSyncBin();
-	if (!bin) return Promise.resolve("kb-sync not installed — run the harness setup.sh.");
+// Skill scripts can hit the network and write to stderr on failure — capture both streams.
+function runScript(bin, args, timeout) {
+	if (!bin) return Promise.resolve("script not installed — run the harness setup.sh.");
 	return new Promise((res) =>
-		execFile(bin, args, { timeout: 180000, maxBuffer: 8 * 1024 * 1024 }, (err, out, errOut) =>
+		execFile(bin, args, { timeout, maxBuffer: 8 * 1024 * 1024 }, (err, out, errOut) =>
 			res(((out || "") + (errOut || "")).trim() || (err ? String(err.message) : "(no output)")),
 		),
 	);
 }
+
+const runSync = (args) => runScript(resolveSkillBin("kb-sync", "KB_SYNC_BIN"), args, 180000);
+// Conversion + distillation of a big source can take minutes — generous timeout.
+const runConvert = (args) => runScript(resolveSkillBin("kb-convert", "KB_CONVERT_BIN"), args, 600000);
 
 const listPages = (vault) => {
 	try {
@@ -102,6 +105,8 @@ First read \`${vault}/AGENTS.md\` (vault rules) and \`${vault}/index.md\` (proje
 - QUERY (a question about the vault): search, then synthesize an answer with [[wikilink]] citations. Do NOT write unless I ask.
 - SCAN ("осмотрись тут" / material in the CWD that belongs in the vault): survey the CWD, map files to vault pages, and output a PLAN only — wait for my confirmation before writing.
 - INGEST (a source to record, or my confirmation of a plan): run the ingest workflow — new pages get YAML front matter, append a \`## [YYYY-MM-DD] ingest | <source>\` line to log.md (update index.md only for a new project — it's a project map), cross-reference with [[wikilinks]].
+
+Large documents (PDF/DOCX/HTML/URL — anything you can't cheaply read whole): NEVER load them into this conversation. Compile once with the \`kb_convert\` tool (action "convert" → sections in \`raw/<name>/\`, then action "distill" → \`raw/<name>/_map.md\`), then work map-first: read \`_map.md\`, grep the section files, read ONLY the sections that matched. The same applies to already-compiled sources you find under \`raw/\`.
 
 My request: ${req || "(none given — ask what I want, or default to QUERY mode)"}`;
 
@@ -142,6 +147,24 @@ export default function install(pi) {
 			required: ["command"],
 		},
 		execute: async (_id, p) => text(await runSync([p.command])),
+	});
+
+	pi.registerTool({
+		name: "kb_convert",
+		label: "kb_convert",
+		description:
+			"Compile a document or URL (pdf/docx/html/md/…) into greppable markdown sections under the vault's raw/<name>/ ('convert'), or build its per-section retrieval map raw/<name>/_map.md ('distill'). Use for any source too large to read whole; afterwards answer from _map.md plus the matched section files only — never load the entire source.",
+		parameters: {
+			type: "object",
+			properties: {
+				action: { type: "string", enum: ["convert", "distill"], description: "convert a new source, or distill an already-converted one into _map.md" },
+				source: { type: "string", description: "file path or URL to convert, or the raw/<name> to distill" },
+				name: { type: "string", description: "optional folder name under raw/ (convert only)" },
+			},
+			required: ["action", "source"],
+		},
+		execute: async (_id, p) =>
+			text(await runConvert(p.action === "distill" ? ["distill", p.source] : [p.source, ...(p.name ? [p.name] : [])])),
 	});
 
 	pi.registerCommand("kb-sync", {

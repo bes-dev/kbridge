@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# kb-convert — compile any document or URL into greppable markdown sections in the vault.
+#
+# The deterministic half of source ingest: convert with the best locally-available tool,
+# split by structure into <vault>/raw/<name>/NNN-<section>.md (files are the chunks, the
+# filesystem is the index), and optionally distill a per-section _map.md with one-shot
+# LLM calls in clean contexts — so no agent ever loads a whole source into a dialogue
+# window. Raw sources stay immutable: an existing raw/<name>/ is never overwritten.
+#
+# Usage:
+#   kb-convert <file-or-url> [name]   convert + split into <vault>/raw/<name>/
+#   kb-convert distill <name|dir>     write _map.md: per-section summaries via $KB_DISTILL_CMD
+#                                     (default `pi --print`), one clean-context call per section
+#   kb-convert check                  show which converters are available
+#
+# Converters, tried in order of fidelity (each optional):
+#   pdf:                 docling, markitdown, pdftotext
+#   docx/pptx/html/...:  docling, markitdown, pandoc
+#   md/markdown/txt:     used as-is
+# With none installed the script fails with a hint — agents then fall back to reading the
+# source natively in batches via subagents (see SKILL.md).
+
+set -euo pipefail
+
+SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+die() { echo "kb-convert: $*" >&2; exit 1; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+resolve_vault() {
+  if [ -n "${KB_VAULT:-}" ] && [ -d "${KB_VAULT}" ]; then echo "${KB_VAULT}"; return; fi
+  for f in "$SKILL_DIR/vault_path" "$HOME/.claude/skills/kb/vault_path"; do
+    [ -f "$f" ] || continue
+    v="$(tr -d '\n' < "$f")"
+    [ -n "$v" ] && [ -d "$v" ] && { echo "$v"; return; }
+  done
+  die "vault not configured — run setup.sh (or set \$KB_VAULT)"
+}
+
+slugify() { echo "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-60; }
+
+convert_md() { # $1 src file, $2 tmp dir → echoes path of converted markdown
+  local src=$1 tmp=$2 out=$2/converted.md ext
+  ext=$(echo "${src##*.}" | tr '[:upper:]' '[:lower:]')
+  case "$ext" in md|markdown|txt) echo "$src"; return ;; esac
+  if have docling; then
+    mkdir -p "$tmp/docling"
+    if docling "$src" --to md --output "$tmp/docling" >/dev/null 2>&1 \
+       && ls "$tmp/docling"/*.md >/dev/null 2>&1; then
+      cat "$tmp/docling"/*.md > "$out"; echo "$out"; return
+    fi
+  fi
+  if have markitdown && markitdown "$src" > "$out" 2>/dev/null && [ -s "$out" ]; then
+    echo "$out"; return
+  fi
+  if [ "$ext" = pdf ]; then
+    if have pdftotext && pdftotext -layout "$src" "$out" 2>/dev/null && [ -s "$out" ]; then
+      echo "$out"; return
+    fi
+  elif have pandoc && pandoc "$src" -t gfm --wrap=none -o "$out" 2>/dev/null && [ -s "$out" ]; then
+    echo "$out"; return
+  fi
+  die "no converter succeeded for .$ext — install docling or markitdown (pip install --user), or pandoc/pdftotext"
+}
+
+split_md() { # $1 markdown file, $2 dest dir — one file per section; files are the chunks
+  local src=$1 dest=$2 h1 h2 pat=""
+  h1=$(grep -cE '^# [^#]' "$src") || true
+  h2=$(grep -cE '^##? ' "$src") || true
+  if [ "${h1:-0}" -ge 3 ]; then pat='^# [^#]'
+  elif [ "${h2:-0}" -ge 3 ]; then pat='^##? '
+  fi
+  if [ -z "$pat" ] && [ "$(wc -c < "$src")" -le 32768 ]; then
+    cp "$src" "$dest/001-document.md"; return
+  fi
+  if [ -n "$pat" ]; then
+    awk -v dir="$dest" -v pat="$pat" '
+      function newf(t,  s) { s=tolower(t); gsub(/^#+[ \t]*/, "", s); gsub(/[^a-z0-9]+/, "-", s)
+        gsub(/^-+|-+$/, "", s); if (s == "") s="section"
+        if (f) close(f); f=sprintf("%s/%03d-%.40s.md", dir, ++n, s) }
+      $0 ~ pat { newf($0) }
+      { if (!f) newf("intro"); print > f }' "$src"
+  else  # no usable structure (e.g. pdftotext output) — fixed-size chunks
+    awk -v dir="$dest" '
+      NR % 400 == 1 { if (f) close(f); f=sprintf("%s/%03d-part.md", dir, ++n) }
+      { print > f }' "$src"
+  fi
+}
+
+case "${1:-}" in
+  check)
+    for t in docling markitdown pandoc pdftotext; do
+      if have "$t"; then echo "$t: available"; else echo "$t: not installed"; fi
+    done
+    exit 0 ;;
+  distill)
+    dir="${2:-}"; [ -n "$dir" ] || die "usage: kb-convert distill <name|dir>"
+    [ -d "$dir" ] || dir="$(resolve_vault)/raw/$dir"
+    [ -d "$dir" ] || die "no such source dir: $dir"
+    ls "$dir"/[0-9]*.md >/dev/null 2>&1 || die "no sections in $dir — run kb-convert on the source first"
+    DCMD="${KB_DISTILL_CMD:-pi --print}"
+    have "${DCMD%% *}" || die "'${DCMD%% *}' not found — set \$KB_DISTILL_CMD, or let your agent build _map.md (see SKILL.md)"
+    map="$dir/_map.md"
+    { echo "# Map: $(basename "$dir")"; echo; } > "$map"
+    for f in "$dir"/[0-9]*.md; do
+      echo "distilling $(basename "$f")…" >&2
+      { echo "## $(basename "$f")"
+        $DCMD "Read the file $f and reply with ONLY 2-4 plain sentences for a retrieval map: what this section covers, naming its key terms and their synonyms (in the source language and in English). No preamble." \
+          </dev/null || echo "(distill failed for this section)"
+        echo
+      } >> "$map"
+    done
+    echo "$map"
+    exit 0 ;;
+  "" | -h | --help)
+    die "usage: kb-convert <file-or-url> [name] | distill <name|dir> | check" ;;
+esac
+
+VAULT="$(resolve_vault)"
+src="$1" name="${2:-}"
+tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+
+case "$src" in
+  http://* | https://*)
+    url="$src" ext=html
+    case "${url%%\?*}" in *.pdf) ext=pdf ;; *.md) ext=md ;; esac
+    src="$tmp/download.$ext"
+    curl -fsSL -o "$src" "$url" || die "download failed: $url"
+    [ -n "$name" ] || name="$(slugify "$(basename "${url%%\?*}")")"
+    ;;
+  *)
+    [ -f "$src" ] || die "no such file: $src"
+    src="$(cd "$(dirname "$src")" && pwd)/$(basename "$src")"
+    ;;
+esac
+
+[ -n "$name" ] || name="$(slugify "$(basename "${src%.*}")")"
+[ -n "$name" ] || name=source
+dest="$VAULT/raw/$name"
+[ -e "$dest" ] && die "raw/$name already exists (raw/ is immutable) — pass a different name"
+
+md="$(convert_md "$src" "$tmp")"
+mkdir -p "$tmp/sections"
+split_md "$md" "$tmp/sections"
+n=$(ls "$tmp/sections" | grep -c '^[0-9]') || die "conversion produced no content"
+ext=$(echo "${src##*.}" | tr '[:upper:]' '[:lower:]')
+case "$ext" in md|markdown|txt) ;; *) cp "$src" "$tmp/sections/original.$ext" ;; esac
+mkdir -p "$VAULT/raw"
+mv "$tmp/sections" "$dest"
+
+echo "raw/$name: $n section(s) from $(basename "$src")"
+echo "next: kb-convert distill $name  (builds _map.md — or let your agent distill per section)"

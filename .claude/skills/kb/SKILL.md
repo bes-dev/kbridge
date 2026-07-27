@@ -48,13 +48,28 @@ Behavior:
 5. Wait for explicit confirmation before executing.
 
 ### Write / ingest mode
-Triggers: explicit confirmation of a proposed plan, or direct commands like "запиши это в базу", "добавь в проект X".
-Behavior: execute the ingest workflow from the vault AGENTS.md. Every new page gets YAML front matter (`title`, `tags`, `created: YYYY-MM-DD`). Append a `## [YYYY-MM-DD] ingest | <source>` line to `log.md`, and update `index.md` only if a new project was created (it is a project map, not a page catalog). Cross-reference with `[[wikilinks]]`. Route by reuse — project-specific material to `projects/<project>/`; reusable cross-project reference to `resources/<topic>/` and dormant projects to `archive/`, both created on demand (the vault AGENTS.md is authoritative).
+Triggers: explicit confirmation of a proposed plan, direct commands like "запиши это в базу", "добавь в проект X", or a document/URL handed over to ingest ("вот PDF/ссылка — забери в базу").
+Behavior: execute the ingest workflow from the vault AGENTS.md. For documents and URLs, first compile them per the **Sources** section below — never read a large source whole. Every new page gets YAML front matter (`title`, `tags`, `created: YYYY-MM-DD`). Append a `## [YYYY-MM-DD] ingest | <source>` line to `log.md`, and update `index.md` only if a new project was created (it is a project map, not a page catalog). Cross-reference with `[[wikilinks]]`. Route by reuse — project-specific material to `projects/<project>/`; reusable cross-project reference to `resources/<topic>/` and dormant projects to `archive/`, both created on demand (the vault AGENTS.md is authoritative).
+
+## Sources — compile once, chat fast
+
+Large external documents (PDF, DOCX, HTML, URLs, …) are never worked with directly in the conversation: raw pages flood the context and degrade every later answer. Compile once, then query cheaply.
+
+**Compile (ingest-time, deterministic):** run `~/.claude/skills/kb/kb-convert <file-or-url> [name]` via Bash. It converts with the best locally-available tool (docling / markitdown / pandoc / pdftotext — `kb-convert check` shows which) and splits by structure into `$VAULT/raw/<name>/NNN-<section>.md`, keeping the untouched `original.*` alongside. Files are the chunks; the filesystem is the index.
+
+**Map (distill, clean contexts):** every compiled source needs `raw/<name>/_map.md` — per-section summaries with key terms and synonyms (source language + English). Build it either with `kb-convert distill <name>` (one-shot LLM call per section, default `pi --print`, override via `$KB_DISTILL_CMD`), or yourself: spawn one `Agent` (`subagent_type: Explore`) per section — each reads ONE section file and returns 2–4 sentences — then assemble `_map.md` from the reports. The main conversation must only ever see the summaries, never the full source.
+
+**Finish the ingest as usual:** create the source page per the vault AGENTS.md (front matter, `[[wikilinks]]` to related pages, a `log.md` line) pointing at `raw/<name>/`.
+
+**Query contract for compiled sources:** `_map.md` first → pick candidate sections; then grep across `raw/<name>/` with 2–3 reformulations of the question; read ONLY the matched section files; cite the source page and section. A small source (single file under ~32 KB) may simply be read whole.
+
+**Fallbacks — never block:** if `kb-convert` fails (no bash on Windows, no converter installed), read the document natively in batches (≤20 pages each) via `Agent` subagents that return summaries, and write `_map.md` + section notes from those. The invariant stays: raw content never enters the main context.
 
 ## Rules
 
 - CWD never changes — always use absolute paths under `$VAULT/` for vault operations.
-- Never modify files in `raw/` — those are immutable source materials.
+- Never modify files in `raw/` — those are immutable source materials (`_map.md` is the one exception: it may be created or rebuilt).
+- Never load an entire large source into the conversation — compile it and work map-first (see Sources).
 - All new pages use YAML front matter and relative `[[wikilinks]]`.
 - One topic per page; split if a page grows too long.
 - Never search or read `chats/` unless the user asks or `~/.claude/skills/kb/index_chats` exists (it's excluded from the index by default — see Step 1).
