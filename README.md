@@ -1,7 +1,7 @@
 # kbridge
 
 A bridge between the tools you work in and your personal knowledge base. One install lets
-**Claude Code**, **Pi** and **Emacs** talk to the same Obsidian-style markdown vault — query it,
+**Claude Code**, **Pi**, **elmee** and **Emacs** talk to the same Obsidian-style markdown vault — query it,
 scan the current folder for material that belongs in it, or ingest a source — from *any*
 directory, without `cd`-ing into the vault.
 
@@ -15,10 +15,12 @@ first-class target for the tools you already work in:
 
 - **Claude Code** — a `/kb` skill.
 - **Pi** — a `/kb` command plus `kb_search` / `kb_sync` tools the model can call directly.
+- **elmee** — a `/kb` slash command, plus a user-scope skill the agent loads on its own when a
+  task turns out to need the vault.
 - **Emacs** — a streaming, multi-turn **chat with the vault** (`kb.el`), backed by a persistent
   Pi process — point it at a local model for a fully private KB. See [Emacs](#emacs).
 
-All three resolve the **same recorded vault path**, so they never drift apart.
+They all resolve the **same recorded vault path**, so they never drift apart.
 
 ## Install
 
@@ -31,8 +33,9 @@ cd kbridge
 `setup.sh` is idempotent. It:
 
 1. symlinks the Claude Code skills into `~/.claude/skills/`,
-2. records the vault path (read by all three integrations),
-3. installs the Pi extension globally via `pi install ./pi` (if `pi` is on `PATH`).
+2. records the vault path (read by every integration),
+3. installs the Pi extension globally via `pi install ./pi` (if `pi` is on `PATH`),
+4. symlinks the elmee skill and command into `~/.elmee/skills/` and `~/.elmee/commands/`.
 
 For the Emacs layer, see [Emacs](#emacs) — it needs only a `load-path` entry on top of this.
 
@@ -82,6 +85,14 @@ claude "/kb осмотрись тут, это для проекта Y"  # scan t
   vault, from anywhere.
 - `kb_sync` — a tool to push/pull the vault to its (optionally encrypted) remote (see below).
 - `/kb-index-chats` — toggle whether `chats/` (saved transcripts) is included in search; **off by default** (see [Saved chats](#saved-chats)).
+
+**elmee** — from any directory, `/kb <request>` inside the TUI or `elmee "/kb <request>"` for a
+one-shot run. The same three modes as above. The skill is also listed in every prompt, so the
+agent can reach the vault mid-task without being asked to — for example when a decision it just
+made belongs in a project's `context.md`.
+
+Requires an elmee that follows symlinks when discovering skills (it did not before 2026-08-21);
+otherwise copy `elmee/skills/kb` into `~/.elmee/skills/` instead of linking it.
 
 **Emacs** — `C-c k k` opens the chat; select a region and `C-c k i` files it into the vault;
 `C-c k b` / `C-c k d` attach the current buffer or directory as context. Full tour below.
@@ -292,6 +303,9 @@ kbridge/
 │   ├── vault_path                 # recorded vault path (gitignored; read by all)
 │   ├── sync_remote                # recorded remote URL (gitignored; read by all)
 │   └── index_chats                # flag: include chats/ in search (gitignored; toggle)
+├── elmee/
+│   ├── skills/kb/SKILL.md         # elmee user-scope skill (~/.elmee/skills/kb)
+│   └── commands/kb.md             # elmee slash command  (~/.elmee/commands/kb.md)
 ├── pi/
 │   ├── package.json
 │   └── kb-harness.mjs             # Pi ext: /kb /kb-sync commands + kb_search/kb_sync tools

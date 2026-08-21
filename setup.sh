@@ -11,8 +11,9 @@
 #
 # What it does:
 #   - symlinks .claude/skills/* into ~/.claude/skills/       (Claude Code skills)
-#   - records the vault path in the kb skill's vault_path     (read by BOTH harnesses)
+#   - records the vault path in the kb skill's vault_path     (read by EVERY harness)
 #   - installs the Pi extension globally via `pi install`     (Pi coding agent)
+#   - symlinks elmee/skills/* and elmee/commands/* into ~/.elmee/  (elmee coding agent)
 #   - optionally exports the vault to an encrypted remote      (when a gcrypt URL is given)
 #
 # Idempotent: re-running refreshes symlinks, the recorded path, the Pi install, and the remote.
@@ -60,6 +61,31 @@ if [ -d "$KB_SRC" ]; then
   for s in kb-sync kb-convert; do [ -f "$KB_SRC/$s" ] && chmod +x "$KB_SRC/$s"; done
 fi
 
+# --- elmee: user-scope skills and slash commands ------------------------------
+# elmee discovers ~/.elmee/skills/<name>/SKILL.md and ~/.elmee/commands/<name>.md,
+# both symlink-friendly. The skill carries the protocol; the command is the way a
+# person reaches it without describing the vault every time.
+elmee_installed=()
+for kind in skills commands; do
+  src_dir="$HARNESS_DIR/elmee/$kind"
+  [ -d "$src_dir" ] || continue
+  dst_dir="$HOME/.elmee/$kind"
+  mkdir -p "$dst_dir"
+  for src in "$src_dir"/*; do
+    [ -e "$src" ] || continue
+    name="$(basename "$src")"
+    dst="$dst_dir/${name%/}"
+    if [ -L "$dst" ]; then
+      rm "$dst"
+    elif [ -e "$dst" ]; then
+      echo "Skip elmee $kind/$name: $dst exists and is not a symlink." >&2
+      continue
+    fi
+    ln -s "${src%/}" "$dst"
+    elmee_installed+=("$kind/${name%/}")
+  done
+done
+
 # --- Pi extension ------------------------------------------------------------
 PI_STATUS="skipped (pi not on PATH)"
 if command -v pi >/dev/null 2>&1; then
@@ -91,6 +117,7 @@ fi
 echo
 echo "Vault:             $VAULT_DIR"
 echo "Claude skills:     ${installed[*]:-<none>}"
+echo "elmee:             ${elmee_installed[*]:-<none>}"
 echo "Pi extension:      $PI_STATUS"
 echo "git-remote-gcrypt: $GCRYPT_STATUS"
 echo "Encrypted sync:    $SYNC_STATUS"
@@ -99,6 +126,7 @@ echo "Claude Code — use /kb from any folder. Optional shell helper for ~/.zshr
 echo '  kb() { claude "/kb $*"; }'
 echo
 echo "Pi — /kb and the kb_search tool are now available. Override vault with: export KB_VAULT=<path>"
+echo "elmee — /kb from any folder; the kb skill also loads on its own when a task needs the vault."
 if [ "$SYNC_STATUS" = "not configured" ]; then
   echo
   echo "Optional — export the vault to an end-to-end-encrypted remote (cloud sees only ciphertext):"
