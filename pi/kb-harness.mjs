@@ -4,7 +4,7 @@
  * Mirrors the Claude Code `/kb` skill: the agent operates on the vault with its native
  * file tools using ABSOLUTE paths under $VAULT (never cd), driven by the vault's own
  * AGENTS.md rules. This extension adds the two things the agent can't get for free:
- *   - `kb_search`  — find pages by content/filename anywhere, scoped to the vault;
+ *   - `kb_search`  — ranked page search anywhere in the vault (via the shared kb-wiki script);
  *   - `kb_sync`    — push/pull the vault to its (optionally gcrypt-encrypted) remote;
  *   - `/kb <req>`  — loads vault context and detects the mode (query / scan / ingest);
  *   - `/kb-sync`   — drive the kb-sync script (init / push / pull / status).
@@ -55,24 +55,11 @@ const resolveSkillBin = (name, envVar) => {
 	return cands.find((f) => fs.existsSync(f)) || null;
 };
 
-// chats/ holds saved raw transcripts. It's EXCLUDED from kb_search by default
-// (noise), included only when the shared `index_chats` flag file exists. Toggled
-// via /kb-index-chats; read by all three harnesses (Pi, Claude skill, Emacs).
+// chats/ holds saved raw transcripts. It's EXCLUDED from search by default (noise),
+// included only when the shared `index_chats` flag file exists (kb-wiki reads it).
+// Toggled via /kb-index-chats; shared with the kb skill.
 const indexChatsFile = () => path.join(HOME, ".claude/skills/kb/index_chats");
-const chatsIndexed = () => {
-	for (const f of [path.join(HERE, "..", ".claude/skills/kb/index_chats"), indexChatsFile()]) {
-		try { if (fs.existsSync(f)) return true; } catch {}
-	}
-	return false;
-};
-
 const text = (s) => ({ content: [{ type: "text", text: String(s).slice(0, 8000) || "(no output)" }], details: {} });
-
-function run(cmd, args) {
-	return new Promise((res) =>
-		execFile(cmd, args, { timeout: 30000, maxBuffer: 8 * 1024 * 1024 }, (err, out) => res({ ok: !err || err.code === 1, out: out || "" })),
-	);
-}
 
 // Skill scripts can hit the network and write to stderr on failure — capture both streams.
 function runScript(bin, args, timeout) {
@@ -99,14 +86,14 @@ const listPages = (vault) => {
 	}
 };
 
-const KICKOFF = (vault, req) => `You have access to the personal knowledge-base vault at \`${vault}\`. Operate on it from the current working directory using ABSOLUTE paths under that root — never cd. Use the \`kb_search\` tool to find pages from anywhere.
+const KICKOFF = (vault, req) => `You have access to the personal knowledge-base vault at \`${vault}\` — a markdown wiki. Operate on it from the current working directory using ABSOLUTE paths under that root — never cd.
 
-First read \`${vault}/AGENTS.md\` (vault rules) and \`${vault}/index.md\` (project map), then follow them strictly. \`chats/\` holds saved raw transcripts and is excluded from search by default — ignore it unless I ask. Detect the mode from my request and act:
-- QUERY (a question about the vault): search, then synthesize an answer with [[wikilink]] citations. Do NOT write unless I ask.
-- SCAN ("осмотрись тут" / material in the CWD that belongs in the vault): survey the CWD, map files to vault pages, and output a PLAN only — wait for my confirmation before writing.
-- INGEST (a source to record, or my confirmation of a plan): run the ingest workflow — new pages get YAML front matter, append a \`## [YYYY-MM-DD] ingest | <source>\` line to log.md (update index.md only for a new project — it's a project map), cross-reference with [[wikilinks]].
+First read \`${vault}/AGENTS.md\` (the authority on structure, article format, links and workflows) and \`${vault}/index.md\` (project map), then follow them strictly. Find pages with the \`kb_search\` tool; \`kb-wiki\` (toc / lint / mv) runs via bash at \`${resolveSkillBin("kb-wiki", "KB_WIKI_BIN") || "~/.claude/skills/kb/kb-wiki"}\`. \`chats/\` is excluded from search by default — ignore it unless I ask. Detect the mode from my request:
+- QUERY (a question about the vault): the Query workflow. Do NOT write unless I ask.
+- SCAN ("осмотрись тут" / material in the CWD that belongs in the vault): survey the CWD and output a PLAN only (what goes to raw/, which articles are extended or created, which links are added) — wait for my confirmation.
+- INGEST (a source to record, or my confirmation of a plan): the article-first Ingest workflow — full detail in the articles; compression only in context.md.
 
-Large documents (PDF/DOCX/HTML/URL — anything you can't cheaply read whole): NEVER load them into this conversation. Compile once with the \`kb_convert\` tool (action "convert" → sections in \`raw/<name>/\`, then action "distill" → \`raw/<name>/_map.md\`), then work map-first: read \`_map.md\`, grep the section files, read ONLY the sections that matched. The same applies to already-compiled sources you find under \`raw/\`.
+Large documents (PDF/DOCX/HTML/URL — anything you can't cheaply read whole): NEVER load them into this conversation. Compile once with the \`kb_convert\` tool (action "convert" → sections in \`raw/<name>/\`, then action "distill" → \`raw/<name>/_map.md\`), then work map-first: read \`_map.md\`, grep the section files, read ONLY the sections that matched.
 
 My request: ${req || "(none given — ask what I want, or default to QUERY mode)"}`;
 
@@ -114,27 +101,14 @@ export default function install(pi) {
 	pi.registerTool({
 		name: "kb_search",
 		label: "kb_search",
-		description: "Search the personal knowledge-base vault (markdown) by content and filename, from any working directory. Read-only.",
+		description: "Ranked search of the personal knowledge-base wiki from any working directory: title/aliases/tags rank above description and body; all terms must match (falls back to any). Lists pages and raw/ sources separately. Read-only — try 2–3 reformulations, incl. the other language.",
 		parameters: {
 			type: "object",
-			properties: { query: { type: "string", description: "case-insensitive text to find in page bodies and filenames" } },
+			properties: { query: { type: "string", description: "space-separated search terms (case-insensitive)" } },
 			required: ["query"],
 		},
 		executionMode: "parallel",
-		execute: async (_id, p) => {
-			const vault = resolveVault();
-			if (!vault) return text("KB vault not configured — run the harness setup.sh (or set $KB_VAULT).");
-			const q = p.query;
-			const gargs = ["-rIn", "-i", "--include=*.md"];
-			const fargs = [vault, "-name", "*.md", "-not", "-path", "*/.git/*"];
-			if (!chatsIndexed()) { gargs.push("--exclude-dir=chats"); fargs.push("-not", "-path", "*/chats/*"); }
-			const content = await run("grep", [...gargs, "-e", q, vault]);
-			const files = await run("find", fargs);
-			const named = files.out.split("\n").filter((f) => f && path.basename(f).toLowerCase().includes(q.toLowerCase()));
-			const rel = (s) => s.split(vault + "/").join("");
-			const body = content.out.split("\n").slice(0, 60).map(rel).join("\n");
-			return text(`vault: ${vault}\n\n# filename matches\n${named.map(rel).join("\n") || "(none)"}\n\n# content matches (file:line)\n${body || "(none)"}`);
-		},
+		execute: async (_id, p) => text(await runScript(resolveSkillBin("kb-wiki", "KB_WIKI_BIN"), ["search", ...p.query.split(/\s+/).filter(Boolean)], 30000)),
 	});
 
 	pi.registerTool({

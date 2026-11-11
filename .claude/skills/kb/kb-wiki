@@ -1,0 +1,324 @@
+#!/usr/bin/env python3
+"""kb-wiki — the deterministic half of running the vault as a wiki.
+
+Usage:
+  kb-wiki search <terms...> [--all]   ranked search: title/aliases/tags > description > body;
+                                      all terms must match (falls back to any term);
+                                      --all also covers archive/
+  kb-wiki lint [--fix]                broken/ambiguous links, invalid or missing front matter,
+                                      orphans; --fix rewrites links whose target can be found
+                                      uniquely and quotes front-matter values YAML rejects
+  kb-wiki toc <project-dir>           regenerate the contents block of <project-dir>/index.md
+                                      (grouped by category; notes/ last)
+  kb-wiki mv <src> <dst>              git mv a page or folder and rewrite every link to it
+  kb-wiki serve [port]                browse the vault in a browser at http://127.0.0.1:8080
+                                      (stdlib server + wiki.html; same search and link rule)
+
+Link rule (shared by lint and the viewer): [[target]] is either a path from the vault root
+or a page name that is unique in the vault.
+"""
+import json, mimetypes, os, re, subprocess, sys
+from collections import defaultdict
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlsplit
+
+SKILL_DIR = Path(__file__).resolve().parent
+SPECIAL = {"index", "log", "AGENTS", "context"}
+LINK = re.compile(r"!?\[\[([^\]|#\n]+)([^\]\n]*)\]\]")
+CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
+TOC_START, TOC_END = "<!-- toc:start -->", "<!-- toc:end -->"
+
+
+def die(msg):
+    sys.exit(f"kb-wiki: {msg}")
+
+
+def vault():
+    v = os.environ.get("KB_VAULT")
+    if v and os.path.isdir(v):
+        return Path(v)
+    for f in (SKILL_DIR / "vault_path", Path.home() / ".claude/skills/kb/vault_path"):
+        if f.is_file() and (v := f.read_text().strip()) and os.path.isdir(v):
+            return Path(v)
+    die("vault not configured — run setup.sh (or set $KB_VAULT)")
+
+
+def chats_indexed():
+    return any(f.exists() for f in (SKILL_DIR / "index_chats", Path.home() / ".claude/skills/kb/index_chats"))
+
+
+def pages(root, archive=True):
+    skip = {".git", ".obsidian"} | (set() if chats_indexed() else {"chats"}) | (set() if archive else {"archive"})
+    out = {}
+    for p in root.rglob("*.md"):
+        rel = p.relative_to(root)
+        if not skip & set(rel.parts[:1]) and ".git" not in rel.parts:
+            out[rel.with_suffix("").as_posix()] = p
+    return out
+
+
+def front_matter(text):
+    """Tiny YAML subset: `key: value`, `key: [a, b]`, and `- item` lists."""
+    if not text.startswith("---\n") or (end := text.find("\n---", 4)) < 0:
+        return {}, text
+    fm, key = {}, None
+    for line in text[4:end].splitlines():
+        if m := re.match(r"(\w[\w-]*):\s*(.*)", line):
+            key, val = m[1], m[2].strip()
+            fm[key] = [x.strip().strip("'\"") for x in val[1:-1].split(",") if x.strip()] if val.startswith("[") else val.strip("'\"") or []
+        elif key and (m := re.match(r"\s*-\s+(.*)", line)) and isinstance(fm[key], list):
+            fm[key].append(m[1].strip().strip("'\""))
+    return fm, text[end + 4:]
+
+
+def unsafe_yaml(text):
+    """Front-matter lines a real YAML parser rejects, with a quoted fix."""
+    if not text.startswith("---\n") or (end := text.find("\n---", 4)) < 0:
+        return []
+    out = []
+    for line in text[4:end].splitlines():
+        m = re.match(r"(\w[\w-]*):\s+(.+)", line)
+        if m and m[2][0] not in "\"'[{" and (": " in m[2] or " #" in m[2] or m[2][0] in "&*!|>%@`"):
+            out.append((line, f'{m[1]}: "' + m[2].replace("\\", "\\\\").replace('"', '\\"') + '"'))
+    return out
+
+
+def as_list(v):
+    return v if isinstance(v, list) else [v] if v else []
+
+
+# --- search -------------------------------------------------------------------
+
+def rank(root, terms, archive):
+    """Pages matching all terms (or, failing that, any), best first: (all_matched, hits)."""
+    hits = []
+    for rel, p in pages(root, archive).items():
+        fm, body = front_matter(p.read_text(errors="ignore"))
+        head = " ".join([str(fm.get("title", "")), rel, *as_list(fm.get("aliases")), *as_list(fm.get("tags"))]).lower()
+        desc, low = str(fm.get("description", "")).lower(), body.lower()
+        found = [t for t in terms if t in head or t in desc or t in low]
+        if not found:
+            continue
+        snippets = [(n, line.strip()[:160]) for n, line in enumerate(body.splitlines(), 1) if any(t in line.lower() for t in terms)][:2]
+        hits.append({"path": rel, "title": str(fm.get("title", "")), "description": str(fm.get("description", ""))[:200],
+                     "all": len(found) == len(terms), "snippets": snippets,
+                     "score": sum(10 * (t in head) + 5 * (t in desc) + min(low.count(t), 20) for t in found)})
+    every = any(h["all"] for h in hits)
+    return every, sorted((h for h in hits if h["all"] or not every), key=lambda h: -h["score"])
+
+
+def search(args):
+    terms = [t.lower() for t in args if t != "--all"]
+    if not terms:
+        die("search needs at least one term")
+    every, hits = rank(vault(), terms, "--all" in args)
+    if hits and not every:
+        print("(no page has all terms — showing pages with any)\n")
+    for title, group, limit in (("pages", [h for h in hits if not h["path"].startswith("raw/")], 12),
+                                ("sources (raw/ — read _map.md first)", [h for h in hits if h["path"].startswith("raw/")], 5)):
+        print(f"# {title}")
+        for h in group[:limit]:
+            print(f"{h['path']} · {h['title']}" + (f"\n  {h['description']}" if h["description"] else ""))
+            for n, line in h["snippets"]:
+                print(f"  {n}: {line}")
+        print("(none)\n" if not group else "")
+
+
+# --- links --------------------------------------------------------------------
+
+def index(all_pages):
+    names = defaultdict(list)
+    for rel in all_pages:
+        names[rel.rsplit("/", 1)[-1]].append(rel)
+    return names
+
+
+def target_of(target, all_pages, names, root):
+    """The page (or folder) a link points to under the link rule, or None."""
+    t = target.strip().removesuffix(".md").strip("/")
+    if t in all_pages or (root / t).is_dir():
+        return t
+    return names[t][0] if "/" not in t and len(names.get(t, [])) == 1 else None
+
+
+def repair(src, target, all_pages, root):
+    """A unique full path for a link that doesn't resolve, or None."""
+    t = target.strip().removesuffix(".md").strip("/")
+    rel = os.path.normpath(os.path.join(os.path.dirname(src), t))
+    if rel in all_pages or (root / rel).is_dir():
+        return rel
+    parts = t.split("/")
+    for i in range(len(parts)):
+        tail = "/".join(parts[i:])
+        cands = [p for p in all_pages if p == tail or p.endswith("/" + tail)]
+        if len(cands) == 1:
+            return cands[0]
+        if len(cands) > 1:
+            same_dir = [p for p in cands if os.path.dirname(p) == os.path.dirname(src)]
+            return same_dir[0] if len(same_dir) == 1 else None
+    return None
+
+
+def links(text):
+    return [m[1] for m in LINK.finditer(CODE.sub("", text))]
+
+
+def lint(args):
+    fix = "--fix" in args
+    root = vault()
+    all_pages = pages(root)
+    names = index(all_pages)
+    broken, fixed, no_fm, no_desc, bad_yaml = [], [], [], [], []
+    inbound = defaultdict(int)
+    for rel, p in all_pages.items():
+        text = p.read_text(errors="ignore")
+        new = text
+        for target in links(text):
+            t = target.strip().removesuffix(".md").strip("/")
+            if to := target_of(target, all_pages, names, root):
+                inbound[to] += 1
+            elif fix and (to := repair(rel, target, all_pages, root)):
+                new = re.sub(r"(!?\[\[)" + re.escape(target) + r"(?=[\]|#])", lambda m: m[1] + to, new)
+                fixed.append(f"{rel}: [[{target}]] → [[{to}]]")
+                inbound[to] += 1
+            else:
+                why = "ambiguous name" if len(names.get(t, [])) > 1 else "no such page"
+                broken.append(f"{rel}: [[{target}]] ({why})")
+        for line, quoted in unsafe_yaml(new):
+            if fix:
+                new = new.replace(line, quoted, 1)
+                fixed.append(f"{rel}: quoted front-matter value `{line.split(':')[0]}`")
+            else:
+                bad_yaml.append(f"{rel}: {line[:80]}")
+        if new != text:
+            p.write_text(new)
+        if rel.startswith("raw/") or rel.rsplit("/", 1)[-1] in SPECIAL - {"context"}:
+            continue
+        fm, _ = front_matter(text)
+        if not fm.get("title"):
+            no_fm.append(rel)
+        elif not fm.get("description"):
+            no_desc.append(rel)
+    orphans = [r for r in all_pages if not inbound[r] and not r.startswith("raw/") and r.rsplit("/", 1)[-1] not in SPECIAL]
+    for title, items in (("Fixed", fixed), ("Invalid front matter (not valid YAML)", bad_yaml), ("Broken links", broken), ("No front matter / title", no_fm),
+                         ("No description", no_desc), ("Orphans (no inbound links)", orphans)):
+        if items:
+            print(f"## {title} ({len(items)})\n" + "\n".join(f"- {i}" for i in sorted(items)) + "\n")
+    print(f"{len(all_pages)} pages · {len(broken)} broken links · {len(orphans)} orphans")
+    sys.exit(1 if broken or bad_yaml else 0)
+
+
+# --- toc ----------------------------------------------------------------------
+
+def toc(args):
+    if len(args) != 1:
+        die("usage: kb-wiki toc <project-dir>")
+    root = vault()
+    proj = (root / args[0]).resolve()
+    if not proj.is_dir():
+        die(f"no such folder: {proj}")
+    prefix = proj.relative_to(root).as_posix()
+    groups = defaultdict(list)
+    for rel, p in sorted(pages(root).items()):
+        if not rel.startswith(prefix + "/") or rel == prefix + "/index":
+            continue
+        fm, _ = front_matter(p.read_text(errors="ignore"))
+        sub = rel[len(prefix) + 1:]
+        cat = fm.get("category") or (sub.split("/")[0] if "/" in sub else "")
+        groups[str(cat)].append(f"- [[{rel}|{fm.get('title') or sub}]]" + (f" — {fm['description']}" if fm.get("description") else ""))
+    block = "\n\n".join(("\n".join(([f"## {c}"] if c else []) + items)) for c, items in sorted(groups.items(), key=lambda g: (g[0] != "", g[0] == "notes", g[0])))
+    block = f"{TOC_START}\n{block}\n{TOC_END}"
+    idx = proj / "index.md"
+    if idx.exists():
+        text = idx.read_text()
+        text = re.sub(re.escape(TOC_START) + ".*?" + re.escape(TOC_END), lambda _: block, text, flags=re.S) if TOC_START in text else text.rstrip() + "\n\n" + block + "\n"
+    else:
+        text = f"---\ntitle: {proj.name}\ndescription: \n---\n\n# {proj.name}\n\n{block}\n"
+    idx.write_text(text)
+    print(f"{idx.relative_to(root)}: {sum(map(len, groups.values()))} pages in {len(groups)} sections")
+
+
+# --- mv -----------------------------------------------------------------------
+
+def mv(args):
+    if len(args) != 2:
+        die("usage: kb-wiki mv <src> <dst>   (vault-relative, without .md for pages)")
+    root = vault()
+    src, dst = (a.removesuffix(".md").strip("/") for a in args)
+    is_page = (root / f"{src}.md").is_file()
+    if not is_page and not (root / src).is_dir():
+        die(f"no such page or folder: {src}")
+    (root / dst).parent.mkdir(parents=True, exist_ok=True)
+    ext = ".md" if is_page else ""
+    subprocess.run(["git", "-C", str(root), "mv", src + ext, dst + ext], check=True)
+    pat = re.compile(r"(!?\[\[)" + re.escape(src) + r"(?=[/\]|#])")
+    n = 0
+    for p in pages(root).values():
+        text = p.read_text(errors="ignore")
+        new, k = pat.subn(lambda m: m[1] + dst, text)
+        if k:
+            p.write_text(new)
+            n += k
+    print(f"moved {src} → {dst}; rewrote {n} links")
+
+
+# --- serve --------------------------------------------------------------------
+
+def page_index(root):
+    """Metadata of every page plus its resolved outgoing links — what the viewer navigates by."""
+    all_pages = pages(root)
+    names = index(all_pages)
+    out = []
+    for rel, p in sorted(all_pages.items()):
+        text = p.read_text(errors="ignore")
+        fm, _ = front_matter(text)
+        out.append({"path": rel, "title": str(fm.get("title") or ""), "description": str(fm.get("description") or ""),
+                    "category": str(fm.get("category") or ""), "tags": as_list(fm.get("tags")),
+                    "updated": str(fm.get("updated") or fm.get("created") or ""),
+                    "links": sorted({t for x in links(text) if (t := target_of(x, all_pages, names, root))})})
+    return out
+
+
+def serve(args):
+    root = vault().resolve()
+    port = int(args[0]) if args else 8080
+
+    class Handler(BaseHTTPRequestHandler):
+        def reply(self, body, ctype, code=200):
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            url = urlsplit(self.path)
+            q = parse_qs(url.query)
+            if url.path == "/":
+                return self.reply((SKILL_DIR / "wiki.html").read_bytes(), "text/html; charset=utf-8")
+            if url.path == "/api/pages":
+                return self.reply(json.dumps(page_index(root)).encode(), "application/json")
+            if url.path == "/api/search":
+                hits = rank(root, q.get("q", [""])[0].lower().split(), True)[1][:30]
+                return self.reply(json.dumps(hits).encode(), "application/json")
+            f = (root / unquote(url.path.removeprefix("/vault/"))).resolve()
+            hidden = {".git"} | (set() if chats_indexed() else {"chats"})
+            if url.path.startswith("/vault/") and f.is_file() and f.is_relative_to(root) and not hidden & set(f.relative_to(root).parts):
+                ctype = "text/markdown; charset=utf-8" if f.suffix == ".md" else mimetypes.guess_type(f.name)[0] or "application/octet-stream"
+                return self.reply(f.read_bytes(), ctype)
+            self.reply(b"not found", "text/plain", 404)
+
+        def log_message(self, *_):
+            pass
+
+    print(f"kb-wiki: {root} at http://127.0.0.1:{port}  (ctrl+c to stop)")
+    ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
+
+
+COMMANDS = {"search": search, "lint": lint, "toc": toc, "mv": mv, "serve": serve}
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
+        sys.exit(__doc__)
+    COMMANDS[sys.argv[1]](sys.argv[2:])

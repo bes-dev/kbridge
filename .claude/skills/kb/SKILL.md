@@ -7,84 +7,28 @@ allowed-tools: "Read, Write, Edit, Glob, Grep, Bash, PowerShell, Agent"
 
 # /kb — Knowledge Base Access
 
-This skill makes the personal knowledge base available from any current working directory. The vault location is recorded at install time by `setup.sh`.
+The vault is a markdown wiki under one recorded root. This skill only gets you there; **the vault's own `AGENTS.md` is the authority** on structure, article format, links and workflows.
 
 ## Step 0 — Resolve the vault path
 
-Read `~/.claude/skills/kb/vault_path` — a single line containing the absolute path to the vault root. Treat this value as `$VAULT` for the rest of the session.
-
-If the file is missing or empty, the skill is not installed correctly. Tell the user to run `setup.sh [vault-path]` from the harness directory and stop.
+Read `~/.claude/skills/kb/vault_path` — one line, the absolute vault root. Treat it as `$VAULT`. If the file is missing or empty, tell the user to run `setup.sh [vault-path]` from the harness directory and stop.
 
 ## Step 1 — Load vault context
 
-Always start by reading:
-- `$VAULT/AGENTS.md` — vault rules (structure, conventions, ingest/query/lint/distill workflows)
-- `$VAULT/index.md` — project map (one line per active project)
+Read `$VAULT/AGENTS.md` (rules) and `$VAULT/index.md` (project map), and follow them strictly. Never change CWD — use absolute paths under `$VAULT/`.
 
-These define how to operate on the vault. Follow them strictly for the rest of the session. Never change CWD — use absolute paths under `$VAULT/`.
+**`chats/` is excluded by default.** If `~/.claude/skills/kb/index_chats` is **absent**, never search or read `$VAULT/chats/`; if present, treat it like any folder. To toggle on request, create (empty file) or delete that flag and confirm — it is shared with Pi's `/kb-index-chats`.
 
-**Search scope — `chats/` is excluded by default.** `$VAULT/chats/` holds saved raw chat transcripts (noise). Before searching, check whether `~/.claude/skills/kb/index_chats` exists (portable: Glob for it; or `test -f` on Unix, `Test-Path` on Windows): if it is **absent** (the default), NEVER search or read `chats/` — discard any Grep/Glob matches under `chats/`; if it is **present**, the user has opted in — treat `chats/` like any other folder. To **toggle**: if the user asks to include/exclude `chats/` in search, create the flag file (Write an empty file) or delete it (`rm` on Unix, `Remove-Item` on Windows) and confirm (this is the same flag Pi's `/kb-index-chats` and Emacs `C-c C-i` set).
+## Step 2 — Detect the mode
 
-## Step 2 — Detect mode from the user's intent
+- **Query** — a question about vault content ("что у меня есть про…", "найди…"): run the Query workflow from `AGENTS.md`. Don't write unless asked.
+- **Scan-and-propose** — "осмотрись тут", "что здесь полезного для проекта X": survey CWD (skip `.git`, `node_modules`, build output, binaries; >50 files → triage with an `Agent`, `subagent_type: Explore`), read the target project's `index.md` and `context.md`, then output a **plan only** — which material goes to `raw/`, which articles are extended or created (title, category), which links are added, the `log.md` line. Wait for confirmation.
+- **Write / ingest** — a confirmed plan, "запиши в базу", or a handed-over document/URL: run the article-first Ingest workflow from `AGENTS.md`. Write articles in full detail — compression belongs only in `context.md`.
 
-Pick exactly one mode based on what the user said when invoking `/kb`:
+## Tools (Bash; scripts live next to this file)
 
-### Query mode
-Triggers: "что у меня есть про…", "что я знаю о…", "найди…", a question about vault content.
-Behavior: search the vault by filename and content, synthesize an answer with `[[page]]` citations. Do not write unless the user explicitly asks to save the synthesis.
+- `~/.claude/skills/kb/kb-wiki search <terms…> [--all]` — ranked search; prefer it over raw Grep for finding pages. Also `toc <project-dir>`, `lint [--fix]`, `mv <src> <dst>`, `serve [port]` — see `AGENTS.md`.
+- `~/.claude/skills/kb/kb-convert <file-or-url> [name]` — compile a large document into `$VAULT/raw/<name>/`; `kb-convert distill <name>` builds `_map.md`; `kb-convert check` lists converters. Never load a large source whole into the conversation — work map-first and delegate article drafting from big sources to `Agent` subagents, per `AGENTS.md` → Sources. If `kb-convert` fails (no bash, no converter), read the document in ≤20-page batches via subagents that return summaries.
+- `~/.claude/skills/kb/kb-sync status|push|pull|init <gcrypt-url> [gpg-key]` — sync the vault with its (optionally end-to-end-encrypted) remote. Only when asked; offer `push` after writing, and check `status` first — unrelated uncommitted changes must not be swept into one commit silently. The passphrase lives in gpg-agent, never here.
 
-### Scan-and-propose mode
-Triggers: "осмотрись тут", "что здесь полезного для проекта X", invocation from a CWD outside the vault with a hint about where the material might belong.
-Behavior:
-1. Survey CWD with Glob / a depth-limited directory listing. Skip junk (`.git`, `node_modules`, `__pycache__`, build artifacts, large binaries, lockfiles).
-2. If the candidate set is large (>50 files) or deeply nested, spawn an `Agent` (`subagent_type: Explore`) to triage and return a compact report — protects the main context.
-3. Read `index.md` (the project map) and the relevant `projects/<name>/context.md` to understand the target. If no project hint was given, propose the closest match based on content.
-4. Output a **plan only** — do not write anything yet. The plan should specify:
-   - which source files map to which vault paths,
-   - new pages to create (with proposed titles and YAML front matter),
-   - existing pages to update with new `[[wikilinks]]`,
-   - the line to add to `index.md`,
-   - the line to append to `log.md`.
-5. Wait for explicit confirmation before executing.
-
-### Write / ingest mode
-Triggers: explicit confirmation of a proposed plan, direct commands like "запиши это в базу", "добавь в проект X", or a document/URL handed over to ingest ("вот PDF/ссылка — забери в базу").
-Behavior: execute the ingest workflow from the vault AGENTS.md. For documents and URLs, first compile them per the **Sources** section below — never read a large source whole. Every new page gets YAML front matter (`title`, `tags`, `created: YYYY-MM-DD`). Append a `## [YYYY-MM-DD] ingest | <source>` line to `log.md`, and update `index.md` only if a new project was created (it is a project map, not a page catalog). Cross-reference with `[[wikilinks]]`. Route by reuse — project-specific material to `projects/<project>/`; reusable cross-project reference to `resources/<topic>/` and dormant projects to `archive/`, both created on demand (the vault AGENTS.md is authoritative).
-
-## Sources — compile once, chat fast
-
-Large external documents (PDF, DOCX, HTML, URLs, …) are never worked with directly in the conversation: raw pages flood the context and degrade every later answer. Compile once, then query cheaply.
-
-**Compile (ingest-time, deterministic):** run `~/.claude/skills/kb/kb-convert <file-or-url> [name]` via Bash. It converts with the best locally-available tool (docling / markitdown / pandoc / pdftotext — `kb-convert check` shows which) and splits by structure into `$VAULT/raw/<name>/NNN-<section>.md`, keeping the untouched `original.*` alongside. Files are the chunks; the filesystem is the index.
-
-**Map (distill, clean contexts):** every compiled source needs `raw/<name>/_map.md` — per-section summaries with key terms and synonyms (source language + English). Build it either with `kb-convert distill <name>` (one-shot LLM call per section, default `pi --print`, override via `$KB_DISTILL_CMD`), or yourself: spawn one `Agent` (`subagent_type: Explore`) per section — each reads ONE section file and returns 2–4 sentences — then assemble `_map.md` from the reports. The main conversation must only ever see the summaries, never the full source.
-
-**Finish the ingest as usual:** create the source page per the vault AGENTS.md (front matter, `[[wikilinks]]` to related pages, a `log.md` line) pointing at `raw/<name>/`.
-
-**Query contract for compiled sources:** `_map.md` first → pick candidate sections; then grep across `raw/<name>/` with 2–3 reformulations of the question; read ONLY the matched section files; cite the source page and section. A small source (single file under ~32 KB) may simply be read whole.
-
-**Fallbacks — never block:** if `kb-convert` fails (no bash on Windows, no converter installed), read the document natively in batches (≤20 pages each) via `Agent` subagents that return summaries, and write `_map.md` + section notes from those. The invariant stays: raw content never enters the main context.
-
-## Rules
-
-- CWD never changes — always use absolute paths under `$VAULT/` for vault operations.
-- Never modify files in `raw/` — those are immutable source materials (`_map.md` is the one exception: it may be created or rebuilt).
-- Never load an entire large source into the conversation — compile it and work map-first (see Sources).
-- All new pages use YAML front matter and relative `[[wikilinks]]`.
-- One topic per page; split if a page grows too long.
-- Never search or read `chats/` unless the user asks or `~/.claude/skills/kb/index_chats` exists (it's excluded from the index by default — see Step 1).
-- In scan-and-propose mode, always present the plan and wait for confirmation before writing.
-- If a question is better answered by checking the current state of the vault than by guessing, read the files first.
-
-## Sync (optional, may be unconfigured)
-
-The vault can be backed by a remote — optionally end-to-end-encrypted via `git-remote-gcrypt`. The local vault is always plaintext (so you can read/grep it); only the remote is ciphertext. The passphrase/key is handled by gpg-agent and the OS keychain — never by this skill. Drive it through Bash with the sibling script `~/.claude/skills/kb/kb-sync`:
-
-- `kb-sync status` — show the current mode (plain / encrypted) and remote.
-- `kb-sync push` — commit local changes and upload. Offer this after write/ingest mode.
-- `kb-sync pull` — download remote changes. Run before a query if the vault may be stale on this device.
-- `kb-sync init <gcrypt-remote-url> [gpg-key-id]` — export the existing vault to a new encrypted remote (one-time). Omit the key id for a symmetric passphrase.
-
-Only act on sync when the user asks, or offer it after writing. Note: this protects the remote (cloud sees only ciphertext); local device-loss is covered by full-disk encryption, not by this skill.
-
-`kb-sync` is a bash script: on Windows it needs Git Bash (Git for Windows) — run it as `bash ~/.claude/skills/kb/kb-sync <cmd>`. If bash is unavailable, tell the user sync is not set up on this machine and continue without it; encrypted (`gcrypt::`) remotes are not supported on Windows.
+On Windows the scripts need Git Bash (`bash ~/.claude/skills/kb/kb-sync …`) and Python (`python ~/.claude/skills/kb/kb-wiki …`); if unavailable, say so and continue with Glob/Grep. Encrypted (`gcrypt::`) remotes are not supported on Windows.

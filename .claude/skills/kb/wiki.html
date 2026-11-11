@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KB</title>
+<style>
+:root {
+  --bg: #ffffff; --bg-soft: #f6f7f9; --bg-hover: #eef0f3; --text: #1f2328; --muted: #656d76;
+  --border: #e3e6ea; --accent: #2f6feb; --accent-soft: #e8f0fe; --mark: #fff3a3; --missing: #c4314b;
+  --code-bg: #f3f4f6; --shadow: 0 8px 28px rgba(0,0,0,.12);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15171a; --bg-soft: #1c1f23; --bg-hover: #252930; --text: #e6e8eb; --muted: #9aa3ad;
+    --border: #2c3138; --accent: #6ea3ff; --accent-soft: #1d2a40; --mark: #5c4d00; --missing: #ff7b8f;
+    --code-bg: #1f2328; --shadow: 0 8px 28px rgba(0,0,0,.5);
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); }
+body { font: 16px/1.65 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+a.missing { color: var(--missing); border-bottom: 1px dashed var(--missing); }
+
+header { position: sticky; top: 0; z-index: 10; height: 56px; display: flex; align-items: center; gap: 16px;
+  padding: 0 16px; background: var(--bg); border-bottom: 1px solid var(--border); }
+#brand { font-weight: 700; font-size: 18px; color: var(--text); white-space: nowrap; }
+#menu { display: none; background: none; border: 0; font-size: 22px; color: var(--text); cursor: pointer; }
+#search-box { position: relative; flex: 1; max-width: 560px; }
+#q { width: 100%; padding: 8px 12px; font: inherit; font-size: 15px; color: var(--text); background: var(--bg-soft);
+  border: 1px solid var(--border); border-radius: 8px; outline: none; }
+#q:focus { border-color: var(--accent); background: var(--bg); }
+#results { display: none; position: absolute; top: 44px; left: 0; right: 0; max-height: 70vh; overflow: auto;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); }
+#results a { display: block; padding: 10px 14px; color: var(--text); border-bottom: 1px solid var(--border); }
+#results a:hover, #results a.active { background: var(--bg-hover); text-decoration: none; }
+#results .t { font-weight: 600; }
+#results .p, #results .s { font-size: 13px; color: var(--muted); }
+#results .d { font-size: 14px; }
+#results .empty { padding: 12px 14px; color: var(--muted); }
+mark { background: var(--mark); color: inherit; border-radius: 2px; }
+
+#layout { display: grid; grid-template-columns: 290px minmax(0, 1fr) 240px; }
+nav { position: sticky; top: 56px; height: calc(100vh - 56px); overflow: auto; padding: 16px 8px 40px 12px;
+  border-right: 1px solid var(--border); background: var(--bg-soft); font-size: 14px; }
+nav details { margin-left: 10px; }
+nav > details { margin-left: 0; }
+nav summary { cursor: pointer; padding: 3px 6px; border-radius: 6px; color: var(--text); font-weight: 600; list-style: none; }
+nav summary::before { content: "▸"; display: inline-block; width: 14px; color: var(--muted); transition: transform .15s; }
+nav details[open] > summary::before { transform: rotate(90deg); }
+nav summary:hover { background: var(--bg-hover); }
+nav a { display: block; padding: 3px 6px 3px 20px; border-radius: 6px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+nav a:hover { background: var(--bg-hover); text-decoration: none; }
+nav a.current { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+nav .top { margin-bottom: 8px; }
+
+main { min-width: 0; padding: 32px 48px 80px; }
+article { max-width: 780px; margin: 0 auto; }
+.crumbs { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+.crumbs a { color: var(--muted); }
+.lead { font-size: 18px; color: var(--muted); margin: -4px 0 12px; }
+.meta { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: 13px; color: var(--muted);
+  padding-bottom: 16px; margin-bottom: 24px; border-bottom: 1px solid var(--border); }
+.chip { display: inline-block; padding: 1px 9px; border-radius: 999px; background: var(--bg-soft); border: 1px solid var(--border); color: var(--muted); }
+.chip:hover { color: var(--accent); text-decoration: none; }
+.cat { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+article h1 { font-size: 32px; line-height: 1.25; margin: 0 0 12px; }
+article h2 { font-size: 24px; margin: 40px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+article h3 { font-size: 19px; margin: 28px 0 8px; }
+article h4, article h5, article h6 { font-size: 16px; margin: 20px 0 6px; }
+article h2:hover .anchor, article h3:hover .anchor { opacity: 1; }
+.anchor { opacity: 0; margin-left: 6px; color: var(--muted); font-weight: 400; }
+article p, article ul, article ol { margin: 0 0 14px; }
+article li { margin: 3px 0; }
+article li > ul, article li > ol { margin: 4px 0; }
+article img { max-width: 100%; border-radius: 6px; }
+article hr { border: 0; border-top: 1px solid var(--border); margin: 28px 0; }
+article blockquote { margin: 0 0 14px; padding: 6px 16px; border-left: 4px solid var(--border); color: var(--muted); }
+article blockquote.callout { border-left-color: var(--accent); background: var(--accent-soft); color: var(--text); border-radius: 0 8px 8px 0; }
+.callout-title { font-weight: 600; margin: 4px 0; }
+code { font: 0.88em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+pre { background: var(--code-bg); padding: 14px 16px; border-radius: 8px; overflow: auto; margin: 0 0 16px; line-height: 1.5; }
+pre code { background: none; padding: 0; font-size: 13.5px; }
+.table { overflow-x: auto; margin: 0 0 16px; }
+table { border-collapse: collapse; font-size: 14.5px; }
+th, td { border: 1px solid var(--border); padding: 6px 10px; vertical-align: top; }
+th { background: var(--bg-soft); text-align: left; }
+.listing { list-style: none; padding: 0; }
+.listing li { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.listing .d { color: var(--muted); font-size: 14px; }
+
+aside { position: sticky; top: 56px; height: calc(100vh - 56px); overflow: auto; padding: 32px 16px; font-size: 13px; }
+aside h4 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+aside a { display: block; padding: 2px 0; color: var(--muted); }
+aside a:hover { color: var(--accent); text-decoration: none; }
+aside .l3 { padding-left: 12px; }
+aside section { margin-bottom: 28px; }
+
+@media (max-width: 1200px) { #layout { grid-template-columns: 270px minmax(0, 1fr); } aside { display: none; } }
+@media (max-width: 860px) {
+  #layout { grid-template-columns: minmax(0, 1fr); }
+  #menu { display: block; }
+  nav { display: none; position: fixed; top: 56px; left: 0; bottom: 0; width: 86vw; max-width: 320px; z-index: 9; box-shadow: var(--shadow); }
+  body.nav-open nav { display: block; }
+  main { padding: 20px 16px 60px; }
+  article h1 { font-size: 26px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <button id="menu" aria-label="Меню">☰</button>
+  <a id="brand" href="#/index">KB</a>
+  <div id="search-box">
+    <input id="q" type="search" placeholder="Поиск  ( / )" autocomplete="off">
+    <div id="results"></div>
+  </div>
+</header>
+<div id="layout">
+  <nav id="nav"></nav>
+  <main><article id="page"></article></main>
+  <aside id="aside"></aside>
+</div>
+<script>
+// Viewer for the kb vault, served by `kb-wiki serve`. Mirrors kb-wiki: same front-matter
+// subset, same link rule (vault-root path or unique page name), search via /api/search.
+"use strict";
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const base = (p) => p.split("/").pop();
+const dirOf = (p) => p.split("/").slice(0, -1).join("/");
+const href = (path, anchor) => "#/" + encodeURI(path) + (anchor ? "#" + encodeURIComponent(anchor) : "");
+const ROOTS = { projects: "Проекты", resources: "Ресурсы", archive: "Архив", raw: "Источники", chats: "Чаты" };
+const IMAGE = /\.(png|jpe?g|gif|svg|webp|avif)$/i;
+
+let PAGES = [], BY = {}, NAMES = {};
+
+async function loadIndex() {
+  PAGES = await (await fetch("/api/pages")).json();
+  BY = {}; NAMES = {};
+  for (const p of PAGES) { BY[p.path] = p; (NAMES[base(p.path)] ||= []).push(p.path); }
+}
+
+const title = (path) => BY[path]?.title || base(path);
+
+// --- link rule (kb-wiki target_of) ---------------------------------------------
+function resolve(target) {
+  const t = target.trim().replace(/\.md$/, "").replace(/^\/+|\/+$/g, "");
+  if (BY[t]) return { page: t };
+  if (!t.includes("/") && NAMES[t]?.length === 1) return { page: NAMES[t][0] };
+  if (PAGES.some((p) => p.path.startsWith(t + "/"))) return BY[t + "/index"] ? { page: t + "/index" } : { dir: t };
+  return null;
+}
+
+// --- front matter (kb-wiki front_matter) ---------------------------------------
+const unquote = (v) => /^".*"$/.test(v) ? v.slice(1, -1).replace(/\\(.)/g, "$1") : v.replace(/^'(.*)'$/, "$1");
+function frontMatter(text) {
+  if (!text.startsWith("---\n")) return [{}, text];
+  const end = text.indexOf("\n---", 4);
+  if (end < 0) return [{}, text];
+  const fm = {}; let key = null, m;
+  for (const line of text.slice(4, end).split("\n")) {
+    if ((m = line.match(/^(\w[\w-]*):\s*(.*)$/))) {
+      key = m[1]; const v = m[2].trim();
+      fm[key] = v.startsWith("[") ? v.slice(1, -1).split(",").map((x) => unquote(x.trim())).filter(Boolean) : unquote(v) || [];
+    } else if (key && (m = line.match(/^\s*-\s+(.*)/)) && Array.isArray(fm[key])) fm[key].push(unquote(m[1].trim()));
+  }
+  return [fm, text.slice(text.indexOf("\n", end + 4) + 1 || text.length)];
+}
+
+// --- markdown ------------------------------------------------------------------
+function slugify(s, seen) {
+  let id = s.toLowerCase().replace(/<[^>]+>/g, "").replace(/[^\p{L}\p{N}\s-]/gu, "").trim().replace(/\s+/g, "-") || "section";
+  if (seen[id]) id += "-" + seen[id]++; else seen[id] = 1;
+  return id;
+}
+
+function wikilink(embed, target, anchor, alias, dir) {
+  if (embed && IMAGE.test(target)) {
+    const src = target.includes("/") ? target : (dir ? dir + "/" : "") + target;
+    return `<img src="/vault/${encodeURI(src)}" alt="${esc(alias || target)}">`;
+  }
+  const r = resolve(target);
+  const text = alias || (r?.page ? (target.includes("/") ? title(r.page) : target) : target) + (anchor ? " › " + anchor : "");
+  if (!r) return `<a class="missing" title="Нет такой страницы">${esc(text)}</a>`;
+  return `<a href="${r.page ? href(r.page, anchor && slugify(anchor, {})) : "#dir/" + encodeURI(r.dir)}">${esc(text)}</a>`;
+}
+
+function inline(s, dir) {
+  const stash = [];
+  const keep = (html) => `\u0000${stash.push(html) - 1}\u0000`;
+  s = s.replace(/`([^`]+)`/g, (_, c) => keep(`<code>${esc(c)}</code>`));
+  s = s.replace(/(!?)\[\[([^\]|#\n]+)(?:#([^\]|\n]*))?(?:\|([^\]\n]+))?\]\]/g, (_, e, t, a, al) => keep(wikilink(e, t, a, al, dir)));
+  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_, alt, src) =>
+    keep(`<img alt="${esc(alt)}" src="${esc(/^https?:/.test(src) ? src : "/vault/" + (dir ? dir + "/" : "") + src)}">`));
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, text, url) =>
+    /^(https?:|mailto:|#)/.test(url) ? keep(`<a href="${esc(url)}" target="_blank" rel="noopener">${esc(text)}</a>`) : `${text} (${url})`);
+  s = s.replace(/(^|[\s(])(https?:\/\/[^\s<>)]+)/g, (_, pre, url) => pre + keep(`<a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a>`));
+  s = esc(s)
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^\w*])\*(?!\s)(.+?)\*(?!\w)/g, "$1<em>$2</em>")
+    .replace(/~~(.+?)~~/g, "<del>$1</del>");
+  return s.replace(/\u0000(\d+)\u0000/g, (_, i) => stash[i]);
+}
+
+const LIST = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
+const BLOCK = /^\s*(```|#{1,6}\s|>|\||([-*+]|\d+[.)])\s|(---|\*\*\*|___)\s*$)/;
+const dedent = (lines) => {
+  const n = Math.min(...lines.filter((l) => l.trim()).map((l) => l.match(/^\s*/)[0].length));
+  return lines.map((l) => l.slice(Number.isFinite(n) ? n : 0));
+};
+const cells = (row) => row.trim().replace(/^\||\|$/g, "").split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
+
+function render(md, dir, heads = [], seen = {}) {
+  const L = md.split("\n"), out = [];
+  for (let i = 0; i < L.length;) {
+    const l = L[i];
+    if (!l.trim()) { i++; continue; }
+    if (/^\s*<!--/.test(l)) { while (i < L.length && !L[i].includes("-->")) i++; i++; continue; }
+    if (/^\s*```/.test(l)) {
+      const buf = []; i++;
+      while (i < L.length && !/^\s*```/.test(L[i])) buf.push(L[i++]);
+      i++; out.push(`<pre><code>${esc(dedent(buf).join("\n"))}</code></pre>`); continue;
+    }
+    let m;
+    if ((m = l.match(/^(#{1,6})\s+(.*?)\s*#*\s*$/))) {
+      const n = m[1].length, html = inline(m[2], dir), id = slugify(m[2], seen);
+      heads.push({ n, id, html });
+      out.push(`<h${n} id="${id}">${html}${n > 1 && n < 4 ? `<a class="anchor" href="${href(current.path, id)}">#</a>` : ""}</h${n}>`);
+      i++; continue;
+    }
+    if (/^\s*(---|\*\*\*|___)\s*$/.test(l)) { out.push("<hr>"); i++; continue; }
+    if (/^\s*>/.test(l)) {
+      const buf = [];
+      while (i < L.length && /^\s*>/.test(L[i])) buf.push(L[i++].replace(/^\s*>\s?/, ""));
+      const c = buf[0].match(/^\[!(\w+)\][-+]?\s*(.*)$/);
+      out.push(c ? `<blockquote class="callout"><div class="callout-title">${inline(c[2] || c[1], dir)}</div>${render(buf.slice(1).join("\n"), dir, [], seen)}</blockquote>`
+                 : `<blockquote>${render(buf.join("\n"), dir, [], seen)}</blockquote>`);
+      continue;
+    }
+    if (/^\s*\|/.test(l) && /^\s*\|?\s*:?-{2,}/.test(L[i + 1] || "")) {
+      const align = cells(L[i + 1]).map((c) => c.endsWith(":") ? (c.startsWith(":") ? "center" : "right") : "");
+      const td = (tag, row) => "<tr>" + cells(row).map((c, k) => `<${tag}${align[k] ? ` style="text-align:${align[k]}"` : ""}>${inline(c, dir)}</${tag}>`).join("") + "</tr>";
+      const rows = [td("th", l)]; i += 2;
+      while (i < L.length && /^\s*\|/.test(L[i])) rows.push(td("td", L[i++]));
+      out.push(`<div class="table"><table>${rows.join("")}</table></div>`); continue;
+    }
+    if ((m = l.match(LIST))) {
+      const indent = m[1].length, ordered = /\d/.test(m[2]), items = [];
+      while (i < L.length) {
+        const x = L[i], mx = x.match(LIST);
+        if (mx && mx[1].length <= indent) { items.push([mx[3]]); i++; }
+        else if (x.trim() && /^\s/.test(x)) { items.at(-1).push(x); i++; }
+        else if (!x.trim() && i + 1 < L.length && (/^\s+\S/.test(L[i + 1]) || (L[i + 1].match(LIST)?.[1].length ?? 99) <= indent)) { items.at(-1).push(""); i++; }
+        else break;
+      }
+      const li = items.map(([first, ...rest]) => {
+        const task = first.match(/^\[([ xX])\]\s+(.*)/);
+        const head = task ? (task[1] === " " ? "☐ " : "☑ ") + inline(task[2], dir) : inline(first, dir);
+        const more = rest.some((r) => r.trim()) ? render(dedent(rest).join("\n"), dir, [], seen) : "";
+        return `<li>${head}${more}</li>`;
+      });
+      out.push(ordered ? `<ol>${li.join("")}</ol>` : `<ul>${li.join("")}</ul>`); continue;
+    }
+    const buf = [];
+    while (i < L.length && L[i].trim() && !(buf.length && BLOCK.test(L[i]))) buf.push(L[i++].trim());
+    out.push(`<p>${inline(buf.join("\n"), dir).replace(/\n/g, " ")}</p>`);
+  }
+  return out.join("\n");
+}
+
+// --- navigation ----------------------------------------------------------------
+function tree() {
+  const root = { kids: {}, pages: [] };
+  for (const p of PAGES) {
+    const parts = p.path.split("/"); let node = root;
+    for (const d of parts.slice(0, -1)) node = node.kids[d] ||= { kids: {}, pages: [] };
+    node.pages.push(p.path);
+  }
+  return root;
+}
+
+function navHtml(node, path, depth) {
+  const order = (p) => ({ index: 0, context: 1 })[base(p)] ?? 2;
+  const pages = node.pages.slice().sort((a, b) => order(a) - order(b) || title(a).localeCompare(title(b), "ru"));
+  const links = pages.map((p) => `<a href="${href(p)}" data-path="${esc(p)}" title="${esc(title(p))}">${esc(base(p) === "index" && depth ? "Главная" : title(p))}</a>`);
+  const dirs = Object.keys(node.kids).sort((a, b) => (a === "notes") - (b === "notes") || a.localeCompare(b)).map((d) => {
+    const full = path ? path + "/" + d : d;
+    const label = (!path && ROOTS[d]) || BY[full + "/index"]?.title || d;
+    const open = current.path?.startsWith(full + "/") || (!path && d === "projects");
+    return `<details${open ? " open" : ""}><summary>${esc(label)}</summary>${navHtml(node.kids[d], full, depth + 1)}</details>`;
+  });
+  return depth ? links.join("") + dirs.join("") : dirs.join("") + `<div class="top">${links.join("")}</div>`;
+}
+
+function drawNav() {
+  $("#nav").innerHTML = navHtml(tree(), "", 0);
+  for (const a of document.querySelectorAll("nav a")) a.classList.toggle("current", a.dataset.path === current.path);
+  document.querySelector("nav a.current")?.scrollIntoView({ block: "nearest" });
+}
+
+// --- pages ---------------------------------------------------------------------
+let current = {};
+
+function crumbs(path) {
+  const parts = path.split("/"), out = [];
+  for (let k = 1; k < parts.length; k++) {
+    const d = parts.slice(0, k).join("/");
+    const label = (k === 1 && ROOTS[d]) || BY[d + "/index"]?.title || parts[k - 1];
+    out.push(BY[d + "/index"] && d + "/index" !== path ? `<a href="${href(d + "/index")}">${esc(label)}</a>` : `<a href="#dir/${encodeURI(d)}">${esc(label)}</a>`);
+  }
+  return out.length ? `<div class="crumbs">${out.join(" / ")}</div>` : "";
+}
+
+async function showPage(path, anchor) {
+  const res = await fetch("/vault/" + encodeURI(path) + ".md");
+  if (!res.ok) return showListing("Страница не найдена", `<p><code>${esc(path)}</code></p>`, []);
+  const [fm, body] = frontMatter(await res.text());
+  const heads = [];
+  const html = render(body, dirOf(path), heads);
+  const hasH1 = /^\s*#\s/.test(body);
+  const tags = [].concat(fm.tags || []).map((t) => `<a class="chip" href="#tag/${encodeURIComponent(t)}">#${esc(t)}</a>`).join(" ");
+  const meta = [fm.category && `<span class="chip cat">${esc(fm.category)}</span>`, (fm.updated || fm.created) && `обновлено ${esc(fm.updated || fm.created)}`,
+                tags, `<code>${esc(path)}</code>`].filter(Boolean).join("");
+  $("#page").innerHTML = crumbs(path) + (hasH1 ? "" : `<h1>${esc(fm.title || base(path))}</h1>`) +
+    (fm.description && !hasH1 ? `<p class="lead">${inline(String(fm.description), dirOf(path))}</p>` : "") +
+    (hasH1 ? html.replace("</h1>", () => `</h1>${fm.description ? `<p class="lead">${inline(String(fm.description), dirOf(path))}</p>` : ""}<div class="meta">${meta}</div>`)
+           : `<div class="meta">${meta}</div>` + html);
+  document.title = (fm.title || base(path)) + " · KB";
+  const toc = heads.filter((h) => h.n === 2 || h.n === 3);
+  const back = PAGES.filter((p) => p.links.includes(path) && p.path !== path);
+  $("#aside").innerHTML =
+    (toc.length ? `<section><h4>На странице</h4>${toc.map((h) => `<a class="l${h.n}" href="${href(path, h.id)}">${h.html.replace(/<[^>]+>/g, "")}</a>`).join("")}</section>` : "") +
+    (back.length ? `<section><h4>Ссылаются сюда · ${back.length}</h4>${back.map((p) => `<a href="${href(p.path)}" title="${esc(p.path)}">${esc(p.title || base(p.path))}</a>`).join("")}</section>` : "");
+  if (anchor) document.getElementById(anchor)?.scrollIntoView(); else window.scrollTo(0, 0);
+}
+
+function showListing(heading, intro, paths) {
+  const items = paths.map((p) => `<li><a href="${href(p)}">${esc(title(p))}</a> <code>${esc(p)}</code>${BY[p]?.description ? `<div class="d">${esc(BY[p].description)}</div>` : ""}</li>`);
+  $("#page").innerHTML = `<h1>${esc(heading)}</h1>${intro}<ul class="listing">${items.join("")}</ul>`;
+  $("#aside").innerHTML = "";
+  document.title = heading + " · KB";
+  window.scrollTo(0, 0);
+}
+
+async function route() {
+  document.body.classList.remove("nav-open");
+  const h = decodeURIComponent(location.hash.slice(1));
+  if (h.startsWith("tag/")) {
+    const tag = h.slice(4);
+    current = {};
+    showListing("#" + tag, "", PAGES.filter((p) => p.tags.includes(tag)).map((p) => p.path));
+  } else if (h.startsWith("dir/")) {
+    const d = h.slice(4);
+    current = {};
+    showListing(ROOTS[d] || d, `<div class="crumbs">${esc(d)}/</div>`, PAGES.filter((p) => p.path.startsWith(d + "/")).map((p) => p.path));
+  } else {
+    const [path, anchor] = (h.replace(/^\//, "") || "index").split("#");
+    current = { path };
+    await showPage(path, anchor);
+  }
+  drawNav();
+}
+
+// --- search (kb-wiki rank via /api/search) -------------------------------------
+let timer, hits = [], active = -1;
+const mark = (s, terms) => terms.reduce((acc, t) => acc.replace(new RegExp(t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), (x) => `<mark>${x}</mark>`), esc(s));
+
+async function search(q) {
+  const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const box = $("#results");
+  if (!terms.length) { box.style.display = "none"; return; }
+  hits = await (await fetch("/api/search?q=" + encodeURIComponent(q))).json();
+  active = -1;
+  box.innerHTML = hits.length ? hits.map((r) => `<a href="${href(r.path)}">
+      <div class="t">${mark(r.title || base(r.path), terms)}</div><div class="p">${esc(r.path)}</div>
+      ${r.description ? `<div class="d">${mark(r.description, terms)}</div>` : ""}
+      ${r.snippets[0] ? `<div class="s">${mark(r.snippets[0][1], terms)}</div>` : ""}</a>`).join("")
+    : `<div class="empty">Ничего не найдено</div>`;
+  box.style.display = "block";
+}
+
+function pick(k) {
+  const links = [...document.querySelectorAll("#results a")];
+  if (!links.length) return;
+  active = (k + links.length) % links.length;
+  links.forEach((a, n) => a.classList.toggle("active", n === active));
+  links[active].scrollIntoView({ block: "nearest" });
+}
+
+$("#q").addEventListener("input", (e) => { clearTimeout(timer); timer = setTimeout(() => search(e.target.value), 150); });
+$("#q").addEventListener("keydown", (e) => {
+  if (e.key === "ArrowDown") { e.preventDefault(); pick(active + 1); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); pick(active - 1); }
+  else if (e.key === "Enter") { const a = document.querySelectorAll("#results a")[Math.max(active, 0)]; if (a) location.hash = a.getAttribute("href"); closeSearch(); }
+  else if (e.key === "Escape") closeSearch();
+});
+function closeSearch() { $("#results").style.display = "none"; $("#q").blur(); }
+document.addEventListener("click", (e) => { if (!e.target.closest("#search-box")) $("#results").style.display = "none"; else if (e.target.closest("#results a")) closeSearch(); });
+document.addEventListener("keydown", (e) => {
+  if ((e.key === "/" || (e.key === "k" && (e.metaKey || e.ctrlKey))) && document.activeElement !== $("#q")) { e.preventDefault(); $("#q").focus(); $("#q").select(); }
+});
+$("#menu").addEventListener("click", () => document.body.classList.toggle("nav-open"));
+
+// Files change under the agents' hands: refresh the index and the page when the tab comes back.
+document.addEventListener("visibilitychange", async () => { if (!document.hidden) { await loadIndex(); route(); } });
+window.addEventListener("hashchange", route);
+loadIndex().then(route);
+</script>
+</body>
+</html>

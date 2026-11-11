@@ -13,7 +13,8 @@
 #   - symlinks .claude/skills/* into ~/.claude/skills/       (Claude Code skills)
 #   - records the vault path in the kb skill's vault_path     (read by EVERY harness)
 #   - installs the Pi extension globally via `pi install`     (Pi coding agent)
-#   - symlinks elmee/skills/* and elmee/commands/* into ~/.elmee/  (elmee coding agent)
+#   - symlinks codex/skills/kb into ~/.codex/skills/               (OpenAI Codex CLI)
+#   - symlinks the kb skill into ~/.agents/skills/            (elmee, and Emacs through genie.el)
 #   - optionally exports the vault to an encrypted remote      (when a gcrypt URL is given)
 #
 # Idempotent: re-running refreshes symlinks, the recorded path, the Pi install, and the remote.
@@ -58,33 +59,47 @@ done
 KB_SRC="$SRC_SKILLS_DIR/kb"
 if [ -d "$KB_SRC" ]; then
   echo "$VAULT_DIR" > "$KB_SRC/vault_path"
-  for s in kb-sync kb-convert; do [ -f "$KB_SRC/$s" ] && chmod +x "$KB_SRC/$s"; done
+  for s in kb-sync kb-convert kb-wiki; do [ -f "$KB_SRC/$s" ] && chmod +x "$KB_SRC/$s"; done
 fi
 
-# --- elmee: user-scope skills and slash commands ------------------------------
-# elmee discovers ~/.elmee/skills/<name>/SKILL.md and ~/.elmee/commands/<name>.md,
-# both symlink-friendly. The skill carries the protocol; the command is the way a
-# person reaches it without describing the vault every time.
-elmee_installed=()
-for kind in skills commands; do
-  src_dir="$HARNESS_DIR/elmee/$kind"
-  [ -d "$src_dir" ] || continue
-  dst_dir="$HOME/.elmee/$kind"
-  mkdir -p "$dst_dir"
-  for src in "$src_dir"/*; do
-    [ -e "$src" ] || continue
-    name="$(basename "$src")"
-    dst="$dst_dir/${name%/}"
-    if [ -L "$dst" ]; then
-      rm "$dst"
-    elif [ -e "$dst" ]; then
-      echo "Skip elmee $kind/$name: $dst exists and is not a symlink." >&2
-      continue
-    fi
-    ln -s "${src%/}" "$dst"
-    elmee_installed+=("$kind/${name%/}")
+# --- Codex: user-scope skill --------------------------------------------------
+# Codex CLI discovers ~/.codex/skills/<name>/SKILL.md (same format as Claude skills).
+CODEX_STATUS="skipped (~/.codex not found)"
+if [ -d "$HOME/.codex" ] && [ -d "$HARNESS_DIR/codex/skills/kb" ]; then
+  mkdir -p "$HOME/.codex/skills"
+  dst="$HOME/.codex/skills/kb"
+  if [ -L "$dst" ]; then
+    rm "$dst"
+  elif [ -e "$dst" ]; then
+    echo "Skip codex skills/kb: $dst exists and is not a symlink." >&2
+  fi
+  if [ ! -e "$dst" ]; then
+    ln -s "$HARNESS_DIR/codex/skills/kb" "$dst"
+    CODEX_STATUS="installed (skills/kb)"
+  else
+    CODEX_STATUS="skipped ($dst not a symlink)"
+  fi
+fi
+
+# --- elmee: the same skill, where it looks for skills --------------------------
+# elmee reads ~/.agents/skills/<name>/SKILL.md, and a skill is also its /name command, so the
+# Claude skill is linked rather than copied: one file for both, and for Emacs through genie.el.
+ELMEE_STATUS="skipped (elmee not on PATH)"
+if command -v elmee >/dev/null 2>&1 && [ -d "$KB_SRC" ]; then
+  mkdir -p "$HOME/.agents/skills"
+  dst="$HOME/.agents/skills/kb"
+  [ -L "$dst" ] && rm "$dst"
+  if [ ! -e "$dst" ]; then
+    ln -s "$KB_SRC" "$dst"
+    ELMEE_STATUS="installed (skill and /kb)"
+  else
+    ELMEE_STATUS="skipped ($dst not a symlink)"
+  fi
+  # Links an earlier setup made, to a skill and a command file that no longer exist.
+  for stale in "$HOME/.elmee/skills/kb" "$HOME/.elmee/commands/kb.md"; do
+    [ -L "$stale" ] && [ ! -e "$stale" ] && rm "$stale"
   done
-done
+fi
 
 # --- Pi extension ------------------------------------------------------------
 PI_STATUS="skipped (pi not on PATH)"
@@ -117,7 +132,8 @@ fi
 echo
 echo "Vault:             $VAULT_DIR"
 echo "Claude skills:     ${installed[*]:-<none>}"
-echo "elmee:             ${elmee_installed[*]:-<none>}"
+echo "Codex:             $CODEX_STATUS"
+echo "elmee:             $ELMEE_STATUS"
 echo "Pi extension:      $PI_STATUS"
 echo "git-remote-gcrypt: $GCRYPT_STATUS"
 echo "Encrypted sync:    $SYNC_STATUS"
@@ -126,7 +142,8 @@ echo "Claude Code — use /kb from any folder. Optional shell helper for ~/.zshr
 echo '  kb() { claude "/kb $*"; }'
 echo
 echo "Pi — /kb and the kb_search tool are now available. Override vault with: export KB_VAULT=<path>"
-echo "elmee — /kb from any folder; the kb skill also loads on its own when a task needs the vault."
+echo "Codex — the kb skill loads when the vault is mentioned; invoke explicitly with 'use the kb skill'."
+echo "elmee — /kb from any folder, in its TUI or in an Emacs chat (genie.el)."
 if [ "$SYNC_STATUS" = "not configured" ]; then
   echo
   echo "Optional — export the vault to an end-to-end-encrypted remote (cloud sees only ciphertext):"
